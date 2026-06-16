@@ -1,0 +1,246 @@
+# udm-bandfix
+
+Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — persistently, from the Cloud Gateway.
+
+> Inspired by [udm-iptv](https://github.com/fabianishere/udm-iptv)
+
+---
+
+## The Problem
+
+Odido NL (formerly T-Mobile NL) publishes a hardware specification for all FWA (Fixed Wireless Access) equipment. It defines exactly which bands must be **active** and which must be permanently **disabled**:
+
+| Radio | Required active bands | Forbidden (must be disabled) |
+|-------|----------------------|------------------------------|
+| LTE (FDD) | B1, B3, B7 | B8, B20, B28 |
+| LTE (TDD) | B38 | — |
+| NR5G SA (FDD) | n1, n3, n7 | n8, n20, n28 |
+| NR5G SA (TDD) | n38, n78 | — |
+| NR5G NSA (FDD) | n1, n3, n7 | n8, n20, n28 |
+| NR5G NSA (TDD) | n38, n78 | — |
+
+From the official spec: *"Het is niet toegestaan om deze banden te gebruiken. De banden moeten uitgezet worden in firmware van de apparatuur, en het moet voor klanten onmogelijk worden gemaakt om de banden te activeren via bijvoorbeeld een app of web GUI."*
+
+The U5G-Max (EM9291) supports band selection via `uiwwand-ctl` over SSH, but:
+
+- The UniFi controller **resets band config to "all" on every reboot** (pushes a fresh config to the modem)
+- There is **no band selection option** in the UniFi Network UI
+- The U5G-Max runs on **tmpfs** — any config written to it is lost on reboot
+- The modem's `/etc/persistent/cfg/` has only ~100 bytes free — too small for scripts
+
+**Result**: every time the Cloud Gateway or U5G-Max reboots, all bands come back and your Odido connection stops working until the bands are manually reset.
+
+## How it Works
+
+udm-bandfix runs as a cron job **on the Cloud Gateway** (not on the modem). Every hour it:
+
+1. Looks up the current U5G-Max IP in the UniFi MongoDB database (the IP is a dynamic public 5G WAN address that changes on reboot)
+2. Connects over SSH using a persistent key pair stored in `/data/`
+3. Reads the current band config via `uiwwand-ctl`
+4. Compares it against the exact Odido specification
+5. If it doesn't match → applies the correct configuration
+6. Verifies the result and logs everything to `/data/udm-bandfix/band-fix.log`
+
+```
+Cloud Gateway (/data/ persistent)
+│
+├── id_ed25519         SSH private key
+├── config             SSH user + ICCID
+├── band-fix.sh        Runs hourly via cron
+└── band-fix.log       Audit log
+         │
+         │ SSH (key-based, no password)
+         ▼
+U5G-Max (UMBBE630)
+│
+└── uiwwand-ctl        Band configuration tool
+```
+
+The ICCID of the active SIM is required by `uiwwand-ctl set-radio-pref`. It's read once during install and cached in the config.
+
+## Network Details
+
+| Setting | Value |
+|---------|-------|
+| APN | `Fwainternet` |
+| IP address | Dynamic public IPv4 |
+| 3GPP release | Release 16 or higher |
+| Connection types | 4G, 5G NSA (option 3X), 5G SA (option 2) |
+
+> **APN note**: If you're using a third-party modem, make sure the APN is set to `Fwainternet`. The U5G-Max configures this automatically from the SIM.
+
+## Tested Environment
+
+| Component | Version |
+|-----------|---------|
+| Cloud Gateway Fiber firmware | v5.1.15 |
+| U5G-Max firmware | 7.4.1.19032 |
+| UniFi Network | 10.4.57 |
+| ISP | Odido 5G Internet voor Bedrijven (FWA, NL) |
+
+## Requirements
+
+- UniFi Cloud Gateway (UDM Pro, UDM SE, or Cloud Gateway Fiber)
+- U5G-Max (model `UMBBE630`) adopted in UniFi Network
+- SSH enabled in **UniFi Network → Settings → Advanced → SSH**
+- `sshpass` available on the Cloud Gateway (for one-time key install)
+- `python3` available on the Cloud Gateway (for JSON parsing)
+
+## Installation
+
+```bash
+curl -sSL https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/install.sh | bash
+```
+
+Run as root on the Cloud Gateway. The installer will:
+
+1. Read the SSH username and password from MongoDB (no manual input needed)
+2. Detect the U5G-Max IP from MongoDB
+3. Generate an SSH key pair at `/data/udm-bandfix/id_ed25519`
+4. Copy the public key to the U5G-Max (uses the MongoDB password — one time only)
+5. Read the SIM ICCID from the modem and cache it
+6. Install `/data/udm-bandfix/band-fix.sh`
+7. Create `/etc/cron.d/udm-bandfix` (runs hourly)
+8. Apply the fix immediately and show the result
+
+### Local install (from cloned repo)
+
+```bash
+git clone https://github.com/powerguardianOS/udm-bandfix
+cd udm-bandfix
+bash install.sh
+```
+
+## Usage
+
+### Check logs
+
+```bash
+tail -f /data/udm-bandfix/band-fix.log
+```
+
+### Run manually
+
+```bash
+/data/udm-bandfix/band-fix.sh
+```
+
+### Verify band configuration on the modem
+
+```bash
+# From the Cloud Gateway
+ICCID=$(grep ICCID /data/udm-bandfix/config | cut -d'"' -f2)
+U5G_IP=$(mongo --quiet localhost:27117/ace --eval "print(db.device.findOne({model:'UMBBE630'}).ip)")
+SSH_USER=$(grep SSH_USER /data/udm-bandfix/config | cut -d'"' -f2)
+printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$ICCID" \
+  | ssh -i /data/udm-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}" uiwwand-ctl
+```
+
+Expected output (Odido-compliant):
+
+```json
+{"result":{"lte_band":"1,3,7,38","nr5g_sa_band":"1,3,7,38,78","nr5g_nsa_band":"1,3,7,38,78"}}
+```
+
+## Uninstall
+
+```bash
+bash /data/udm-bandfix/uninstall.sh
+```
+
+This removes the cron job, all files in `/data/udm-bandfix/`, and the SSH key from the modem. It does **not** revert the band configuration — it will reset to "all" on the next modem reboot anyway.
+
+## Troubleshooting
+
+### "U5G-Max (UMBBE630) not found in MongoDB"
+
+The modem is not adopted or not currently connected. Check **UniFi Network → Devices** and make sure the U5G-Max shows as "Connected".
+
+### "SSH to IP failed — device offline or key not installed"
+
+This is non-fatal; the cron job will retry next hour. If it keeps happening:
+
+```bash
+# Test SSH manually
+SSH_USER=$(grep SSH_USER /data/udm-bandfix/config | cut -d'"' -f2)
+U5G_IP=$(mongo --quiet localhost:27117/ace --eval "print(db.device.findOne({model:'UMBBE630'}).ip)")
+ssh -i /data/udm-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}"
+```
+
+If that fails, re-run `install.sh` to re-copy the SSH key (happens after modem firmware updates that wipe `/root/.ssh/`).
+
+### "Could not read ICCID"
+
+The SIM may still be initializing. Wait 2–3 minutes after reboot and try again:
+
+```bash
+printf '{"method":"get-sim-state"}' \
+  | ssh -i /data/udm-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}" uiwwand-ctl
+```
+
+### `{"error":-1}` from set-radio-pref
+
+Wrong ICCID. Check the correct value:
+
+```bash
+printf '{"method":"get-sim-state"}' \
+  | ssh -i /data/udm-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}" uiwwand-ctl
+```
+
+Then update `/data/udm-bandfix/config`:
+
+```bash
+# Replace the ICCID value
+nano /data/udm-bandfix/config
+```
+
+### Manual band fix (for testing)
+
+SSH into the modem and run directly:
+
+```bash
+ssh -i /data/udm-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}"
+
+# On the modem — replace <ICCID> with your actual ICCID:
+uiwwand-ctl << 'EOF'
+{"method":"set-radio-pref","params":{"iccid":"<ICCID>","lte_band":"1,3,7,38","nr5g_sa_band":"1,3,7,38,78","nr5g_nsa_band":"1,3,7,38,78"}}
+EOF
+```
+
+A successful response is `{"result":{}}`.
+
+### After a modem firmware update
+
+Firmware updates may wipe `/root/.ssh/authorized_keys` on the modem. Re-run the installer:
+
+```bash
+bash /data/udm-bandfix/install.sh
+```
+
+It will skip key generation (key already exists) and re-copy the public key.
+
+### Cron not running
+
+```bash
+# Verify cron file exists
+cat /etc/cron.d/udm-bandfix
+
+# Test manually
+/data/udm-bandfix/band-fix.sh
+```
+
+## Security
+
+- SSH uses ed25519 key-based auth only — no passwords stored in files
+- The MongoDB password is read live for the one-time key copy, never written to disk
+- All files in `/data/udm-bandfix/` are root-only (chmod 600 for config and key)
+- The fix only runs read/write over SSH — no arbitrary code execution on the modem
+
+## License
+
+MIT — see [LICENSE](LICENSE)
+
+---
+
+*Not affiliated with Ubiquiti or Odido. Use at your own risk.*  
+*Band specification source: Odido 5G Internet hardware specificaties en voorwaarden (3GPP Release 16).*

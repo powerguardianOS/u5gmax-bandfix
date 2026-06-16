@@ -1,0 +1,346 @@
+#!/bin/bash
+# udm-bandfix — interactive CLI for managing Odido NL band restrictions
+# Installed to /usr/local/sbin/udm-bandfix
+
+set -euo pipefail
+
+VERSION="1.0.0"
+DATA_DIR="/data/udm-bandfix"
+CONFIG="$DATA_DIR/config"
+SSH_KEY="$DATA_DIR/id_ed25519"
+KNOWN_HOSTS="$DATA_DIR/known_hosts"
+LOG_FILE="$DATA_DIR/band-fix.log"
+CRON_FILE="/etc/cron.d/udm-bandfix"
+BAND_FIX="$DATA_DIR/band-fix.sh"
+
+# Colors
+R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'
+B='\033[0;34m'; C='\033[0;36m'; W='\033[1;37m'; NC='\033[0m'
+BOLD='\033[1m'
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+die()  { printf "${R}✗ ERROR: %s${NC}\n" "$*" >&2; exit 1; }
+pause() { printf "\nPress Enter to continue..."; read -r; }
+
+get_ip() {
+    mongo --quiet localhost:27117/ace \
+        --eval "print(db.device.findOne({model:'UMBBE630'}).ip)" 2>/dev/null | tr -d '\r\n' || echo ""
+}
+
+get_last_run() {
+    if [ -f "$LOG_FILE" ]; then
+        grep -E "^\[" "$LOG_FILE" | tail -1 | grep -oE '^\[[0-9 :-]+\]' | tr -d '[]' || echo "never"
+    else
+        echo "never"
+    fi
+}
+
+cron_status() {
+    [ -f "$CRON_FILE" ] && echo "active (hourly)" || echo "NOT INSTALLED"
+}
+
+ssh_opts() {
+    echo "-i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
+}
+
+load_config() {
+    [ -f "$CONFIG" ] || die "Not installed. Run install.sh first."
+    # shellcheck source=/dev/null
+    source "$CONFIG"
+    : "${SSH_USER:?}"
+}
+
+# ── Header ────────────────────────────────────────────────────────────────────
+print_header() {
+    local u5g_ip cron last_run
+    u5g_ip=$(get_ip)
+    [ -z "$u5g_ip" ] || [ "$u5g_ip" = "null" ] && u5g_ip="${R}offline${NC}"
+    cron=$(cron_status)
+    last_run=$(get_last_run)
+
+    clear
+    printf "${C}"
+    printf '╔══════════════════════════════════════════════╗\n'
+    printf '║          udm-bandfix  v%-5s                 ║\n' "$VERSION"
+    printf '║     Odido NL Band Fix — UniFi U5G-Max       ║\n'
+    printf '╠══════════════════════════════════════════════╣\n'
+    printf "${NC}"
+    printf "  ${W}U5G-Max IP:${NC}  ${u5g_ip}\n"
+    printf "  ${W}Cron:${NC}        %s\n" "$cron"
+    printf "  ${W}Last run:${NC}    %s\n" "$last_run"
+    printf "${C}"
+    printf '╠══════════════════════════════════════════════╣\n'
+    printf "${NC}"
+}
+
+# ── Menu ──────────────────────────────────────────────────────────────────────
+print_menu() {
+    printf "  ${W}1)${NC} Force band check now\n"
+    printf "  ${W}2)${NC} Show current band status\n"
+    printf "  ${W}3)${NC} Edit required bands\n"
+    printf "  ${W}4)${NC} Show logs\n"
+    printf "  ${W}5)${NC} Reinstall SSH key on U5G-Max\n"
+    printf "  ${W}6)${NC} Update to latest version\n"
+    printf "  ${W}7)${NC} Uninstall\n"
+    printf "  ${W}0)${NC} Exit\n"
+    printf "${C}"
+    printf '╚══════════════════════════════════════════════╝\n'
+    printf "${NC}"
+}
+
+# ── Actions ───────────────────────────────────────────────────────────────────
+
+action_force_check() {
+    printf "\n${Y}Running band check...${NC}\n\n"
+    [ -f "$BAND_FIX" ] || die "band-fix.sh not found at $BAND_FIX"
+    bash "$BAND_FIX" && printf "\n${G}✓ Done.${NC}\n" || printf "\n${R}✗ Check failed — see logs.${NC}\n"
+    pause
+}
+
+action_band_status() {
+    load_config
+    local u5g_ip iccid current
+    u5g_ip=$(get_ip)
+    [ -z "$u5g_ip" ] || [ "$u5g_ip" = "null" ] && { printf "\n${R}U5G-Max not found in MongoDB.${NC}\n"; pause; return; }
+
+    printf "\n${Y}Querying U5G-Max band configuration...${NC}\n"
+
+    # Get live ICCID
+    iccid=$(printf '{"method":"get-sim-state"}' \
+        | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null \
+        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['iccid'])" 2>/dev/null) || iccid="${ICCID_CACHE:-}"
+
+    [ -z "$iccid" ] && { printf "${R}Could not read ICCID.${NC}\n"; pause; return; }
+
+    current=$(printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$iccid" \
+        | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null) || \
+        { printf "${R}Could not reach U5G-Max via SSH.${NC}\n"; pause; return; }
+
+    printf "\n${W}ICCID:${NC} %s\n\n" "$iccid"
+
+    python3 - "$current" << 'PYEOF'
+import json, sys
+
+REQUIRED = {
+    "lte_band":      {1, 3, 7, 38},
+    "nr5g_sa_band":  {1, 3, 7, 38, 78},
+    "nr5g_nsa_band": {1, 3, 7, 38, 78},
+}
+FORBIDDEN = {8, 20, 28}
+
+GREEN = "\033[0;32m"
+RED   = "\033[0;31m"
+BOLD  = "\033[1m"
+NC    = "\033[0m"
+
+try:
+    data = json.loads(sys.argv[1])
+    result = data.get("result", {})
+
+    labels = {
+        "lte_band":      "LTE bands    ",
+        "nr5g_sa_band":  "NR5G SA bands",
+        "nr5g_nsa_band": "NR5G NSA bands",
+    }
+
+    for key, req in REQUIRED.items():
+        val = result.get(key, "")
+        actual = {int(b) for b in val.split(",") if b.strip().isdigit()} if val else set()
+        forbidden_present = actual & FORBIDDEN
+        matches_spec = actual == req
+
+        if matches_spec:
+            status = f"{GREEN}✓ Odido-compliant{NC}"
+        elif forbidden_present:
+            status = f"{RED}✗ FORBIDDEN BANDS ACTIVE: {sorted(forbidden_present)}{NC}"
+        else:
+            status = f"{RED}✗ Non-compliant{NC}"
+
+        print(f"  {BOLD}{labels[key]}:{NC} {val or '(empty)'}")
+        print(f"  {'':15}  → {status}")
+        print()
+except Exception as e:
+    print(f"Parse error: {e}")
+PYEOF
+    pause
+}
+
+action_edit_bands() {
+    load_config
+    printf "\n${Y}Edit required band configuration${NC}\n"
+    printf "${W}Current values (from Odido spec):${NC}\n"
+    printf "  LTE:      1,3,7,38\n"
+    printf "  NR5G SA:  1,3,7,38,78\n"
+    printf "  NR5G NSA: 1,3,7,38,78\n"
+    printf "\n${Y}Note:${NC} Odido requires B8/B20/B28 and n8/n20/n28 to be DISABLED.\n"
+    printf "Editing allows you to customize within those constraints.\n\n"
+
+    read -r -p "LTE bands     [1,3,7,38]: " INPUT_LTE
+    read -r -p "NR5G SA bands [1,3,7,38,78]: " INPUT_SA
+    read -r -p "NR5G NSA bands [1,3,7,38,78]: " INPUT_NSA
+
+    INPUT_LTE="${INPUT_LTE:-1,3,7,38}"
+    INPUT_SA="${INPUT_SA:-1,3,7,38,78}"
+    INPUT_NSA="${INPUT_NSA:-1,3,7,38,78}"
+
+    # Validate: ensure forbidden bands are not included
+    local FORBIDDEN="8,20,28"
+    for band in 8 20 28; do
+        for val in "$INPUT_LTE" "$INPUT_SA" "$INPUT_NSA"; do
+            if echo ",$val," | grep -q ",$band,"; then
+                printf "${R}✗ Band %s is forbidden by Odido — cannot enable it.${NC}\n" "$band"
+                pause; return
+            fi
+        done
+    done
+
+    printf "\nApply these bands?\n"
+    printf "  LTE:      %s\n" "$INPUT_LTE"
+    printf "  NR5G SA:  %s\n" "$INPUT_SA"
+    printf "  NR5G NSA: %s\n" "$INPUT_NSA"
+    read -r -p "Confirm? [y/N] " CONFIRM
+    [[ "$CONFIRM" =~ ^[Yy]$ ]] || { printf "Cancelled.\n"; pause; return; }
+
+    # Write custom bands to config
+    {
+        grep -v "^CUSTOM_LTE\|^CUSTOM_SA\|^CUSTOM_NSA" "$CONFIG"
+        printf 'CUSTOM_LTE="%s"\n' "$INPUT_LTE"
+        printf 'CUSTOM_SA="%s"\n' "$INPUT_SA"
+        printf 'CUSTOM_NSA="%s"\n' "$INPUT_NSA"
+    } > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+    chmod 600 "$CONFIG"
+
+    # Patch band-fix.sh to use custom values
+    sed -i \
+        -e "s|^LTE_REQUIRED=.*|LTE_REQUIRED=\"$INPUT_LTE\"|" \
+        -e "s|^NR5G_SA_REQUIRED=.*|NR5G_SA_REQUIRED=\"$INPUT_SA\"|" \
+        -e "s|^NR5G_NSA_REQUIRED=.*|NR5G_NSA_REQUIRED=\"$INPUT_NSA\"|" \
+        "$BAND_FIX"
+
+    printf "\n${G}✓ Bands updated. Running force check...${NC}\n"
+    bash "$BAND_FIX" && printf "\n${G}✓ Applied.${NC}\n" || printf "\n${R}✗ Check failed — see logs.${NC}\n"
+    pause
+}
+
+action_show_logs() {
+    printf "\n${Y}Last 50 lines of %s:${NC}\n\n" "$LOG_FILE"
+    if [ -f "$LOG_FILE" ]; then
+        tail -50 "$LOG_FILE"
+    else
+        printf "(no log file yet)\n"
+    fi
+    printf "\n"
+    read -r -p "Follow log live? [y/N] " FOLLOW
+    if [[ "$FOLLOW" =~ ^[Yy]$ ]]; then
+        printf "${Y}Ctrl+C to stop.${NC}\n\n"
+        tail -f "$LOG_FILE"
+    fi
+}
+
+action_reinstall_key() {
+    load_config
+    local u5g_ip ssh_pass
+    u5g_ip=$(get_ip)
+    [ -z "$u5g_ip" ] || [ "$u5g_ip" = "null" ] && { printf "\n${R}U5G-Max not online.${NC}\n"; pause; return; }
+
+    printf "\n${Y}Reinstalling SSH key on U5G-Max ($u5g_ip)...${NC}\n"
+    printf "Reading password from MongoDB...\n"
+    ssh_pass=$(mongo --quiet localhost:27117/ace \
+        --eval "print(db.setting.findOne({key:'mgmt'}).x_ssh_password)" 2>/dev/null | tr -d '\r\n') || true
+    [ -z "$ssh_pass" ] || [ "$ssh_pass" = "null" ] && { printf "${R}Could not read password from MongoDB.${NC}\n"; pause; return; }
+
+    # Re-scan host key (IP may have changed)
+    ssh-keyscan -T 10 "$u5g_ip" > "$KNOWN_HOSTS" 2>/dev/null || true
+
+    _PASS_FILE=$(mktemp /tmp/.udm-sshpass-XXXXXX)
+    chmod 600 "$_PASS_FILE"
+    printf '%s' "$ssh_pass" > "$_PASS_FILE"
+
+    sshpass -f "$_PASS_FILE" ssh-copy-id \
+        -i "$SSH_KEY.pub" \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$KNOWN_HOSTS" \
+        -o ConnectTimeout=10 \
+        "${SSH_USER}@${u5g_ip}" 2>/dev/null && \
+        printf "${G}✓ SSH key reinstalled.${NC}\n" || \
+        printf "${R}✗ Failed — check connectivity.${NC}\n"
+
+    rm -f "$_PASS_FILE"
+    printf '%s\n' "$u5g_ip" > "$DATA_DIR/last_ip.txt"
+    pause
+}
+
+action_update() {
+    local SCRIPT_SRC="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/src/band-fix.sh"
+    printf "\n${Y}Updating band-fix.sh from GitHub...${NC}\n"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sSL "$SCRIPT_SRC" -o "$BAND_FIX.new" && \
+            mv "$BAND_FIX.new" "$BAND_FIX" && \
+            chmod +x "$BAND_FIX" && \
+            printf "${G}✓ Updated.${NC}\n" || \
+            { rm -f "$BAND_FIX.new"; printf "${R}✗ Update failed.${NC}\n"; }
+    else
+        printf "${R}curl not available.${NC}\n"
+    fi
+    pause
+}
+
+action_uninstall() {
+    printf "\n${R}${BOLD}WARNING: This will remove udm-bandfix completely.${NC}\n"
+    printf "The U5G-Max will revert to all-bands on next reboot.\n\n"
+    read -r -p "Type 'yes' to confirm: " CONFIRM
+    [ "$CONFIRM" = "yes" ] || { printf "Cancelled.\n"; pause; return; }
+
+    local UNINSTALL
+    UNINSTALL="$(dirname "$BAND_FIX")/uninstall.sh"
+    # Try local uninstall.sh first, then fall back to same dir as this script
+    [ -f "$UNINSTALL" ] || UNINSTALL="/usr/local/sbin/udm-bandfix-uninstall"
+
+    if [ -f "$UNINSTALL" ]; then
+        bash "$UNINSTALL"
+        rm -f /usr/local/sbin/udm-bandfix
+        printf "\n${G}Done. udm-bandfix removed.${NC}\n"
+        exit 0
+    else
+        printf "${R}Uninstall script not found at %s${NC}\n" "$UNINSTALL"
+        pause
+    fi
+}
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+# Non-interactive mode: udm-bandfix check|status|logs|update|uninstall
+if [ $# -gt 0 ]; then
+    case "$1" in
+        check)     action_force_check ;;
+        status)    action_band_status ;;
+        logs)      action_show_logs ;;
+        update)    action_update ;;
+        uninstall) action_uninstall ;;
+        *)
+            printf "Usage: udm-bandfix [check|status|logs|update|uninstall]\n"
+            printf "       udm-bandfix          (interactive menu)\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+fi
+
+# Interactive menu
+while true; do
+    print_header
+    print_menu
+    printf "\n  ${W}Choose:${NC} "
+    read -r CHOICE
+
+    case "$CHOICE" in
+        1) action_force_check ;;
+        2) action_band_status ;;
+        3) action_edit_bands ;;
+        4) action_show_logs ;;
+        5) action_reinstall_key ;;
+        6) action_update ;;
+        7) action_uninstall ;;
+        0) clear; exit 0 ;;
+        *) printf "\n${R}Invalid choice.${NC}\n"; sleep 1 ;;
+    esac
+done

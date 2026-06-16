@@ -23,7 +23,7 @@ die()  { printf "${R}✗ ERROR: %s${NC}\n" "$*" >&2; exit 1; }
 pause() { printf "\nPress Enter to continue..."; read -r; }
 
 get_ip() {
-    mongo --quiet localhost:27117/ace \
+    timeout 30 mongo --quiet localhost:27117/ace \
         --eval "print(db.device.findOne({model:'UMBBE630'}).ip)" 2>/dev/null | tr -d '\r\n' || echo ""
 }
 
@@ -245,7 +245,7 @@ action_reinstall_key() {
 
     printf "\n${Y}Reinstalling SSH key on U5G-Max ($u5g_ip)...${NC}\n"
     printf "Reading password from MongoDB...\n"
-    ssh_pass=$(mongo --quiet localhost:27117/ace \
+    ssh_pass=$(timeout 30 mongo --quiet localhost:27117/ace \
         --eval "print(db.setting.findOne({key:'mgmt'}).x_ssh_password)" 2>/dev/null | tr -d '\r\n') || true
     [ -z "$ssh_pass" ] || [ "$ssh_pass" = "null" ] && { printf "${R}Could not read password from MongoDB.${NC}\n"; pause; return; }
 

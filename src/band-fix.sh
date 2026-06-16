@@ -28,9 +28,11 @@ strip_nonprintable() {
 }
 
 log() {
-    local msg
+    local msg line
     msg=$(strip_nonprintable "$*")
-    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" | tee -a "$LOG_FILE"
+    line="$(printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg")"
+    printf '%s\n' "$line" >> "$LOG_FILE"
+    [ -t 1 ] && printf '%s\n' "$line"
 }
 
 die() {

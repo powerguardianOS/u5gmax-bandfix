@@ -211,6 +211,17 @@ elif command -v curl >/dev/null 2>&1; then
 fi
 [ -f "$ON_BOOT_DEST" ] && chmod +x "$ON_BOOT_DEST" && ok "on-boot.sh installed: $ON_BOOT_DEST"
 
+# --- Install uninstall.sh to /data/ ---
+msg "Installing uninstall.sh..."
+UNINSTALL_DEST="$DATA_DIR/uninstall.sh"
+UNINSTALL_SRC_URL="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/uninstall.sh"
+if [ -f "$INSTALLER_DIR/uninstall.sh" ]; then
+    cp "$INSTALLER_DIR/uninstall.sh" "$UNINSTALL_DEST"
+elif command -v curl >/dev/null 2>&1; then
+    curl -sSL "$UNINSTALL_SRC_URL" -o "$UNINSTALL_DEST" || warn "Could not download uninstall.sh"
+fi
+[ -f "$UNINSTALL_DEST" ] && chmod +x "$UNINSTALL_DEST" && ok "uninstall.sh installed: $UNINSTALL_DEST"
+
 # --- Initial run ---
 msg ""
 msg "Running initial band fix..."

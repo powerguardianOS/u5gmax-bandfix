@@ -63,33 +63,13 @@ validate_ssh_user() {
     fi
 }
 
-# --- Log rotation ---
-rotate_log
-
-# --- Create temp directory ---
-mkdir -p "$TMP_DIR"
-chmod 700 "$TMP_DIR"
-
-# --- Singleton guard (atomic via mkdir) ---
-LOCK_DIR="$DATA_DIR/.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    log "Another instance is running — exiting"
-    exit 0
-fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$TMP_DIR"/udm-bandfix-*' EXIT
-
-# --- Load config ---
-[ -f "$CONFIG" ] || die "Config not found: $CONFIG (run install.sh first)"
-# shellcheck source=/dev/null
-source "$CONFIG"
-: "${SSH_USER:?CONFIG missing SSH_USER}"
-validate_ssh_user "$SSH_USER"
-
-# --- Helper: query MongoDB with guaranteed termination (background + SIGKILL) ---
-# `timeout` is unreliable in UCG Fiber cron (no TTY, signals not propagated).
-# Running mongo in background and using explicit kill -9 is portable and reliable.
+# --- Helper: run mongo with guaranteed termination via background+SIGKILL ---
+# `timeout` and SSH ConnectTimeout do not work in UCG Fiber cron: the cron
+# environment does not propagate signals to child processes reliably.
+# Background process + explicit kill -9 works in all environments.
 _query_mongo_ip() {
     local _out="$TMP_DIR/mongo_ip.txt"
+    local _rc=0
     : > "$_out"
     mongo --quiet --connectTimeoutMS 10000 --socketTimeoutMS 10000 \
         localhost:27117/ace \
@@ -98,10 +78,27 @@ _query_mongo_ip() {
     local _pid=$!
     ( sleep 30 && kill -9 "$_pid" 2>/dev/null ) &
     local _kpid=$!
-    wait "$_pid" 2>/dev/null || true
+    { wait "$_pid" 2>/dev/null; } || _rc=$?
     kill "$_kpid" 2>/dev/null; wait "$_kpid" 2>/dev/null || true
     tr -d '\r\n' < "$_out"
     rm -f "$_out"
+    return $_rc
+}
+
+# --- Helper: run SSH with guaranteed termination via background+SIGKILL (20s max) ---
+# Usage: _ssh_bg <outfile> [ssh args...] (stdin from caller via redirect)
+# Output captured to outfile; returns ssh exit code.
+_ssh_bg() {
+    local _out="$1"; shift
+    local _rc=0
+    : > "$_out"
+    ssh "$@" > "$_out" 2>/dev/null &
+    local _pid=$!
+    ( sleep 20 && kill -9 "$_pid" 2>/dev/null ) &
+    local _kpid=$!
+    { wait "$_pid" 2>/dev/null; } || _rc=$?
+    kill "$_kpid" 2>/dev/null; wait "$_kpid" 2>/dev/null || true
+    return $_rc
 }
 
 # --- Helper: update known_hosts when IP changes ---
@@ -116,6 +113,28 @@ _update_known_hosts() {
     mv "$TMP_DIR/known_hosts.tmp" "$KNOWN_HOSTS"
     printf '%s\n' "$_new" > "$LAST_IP_FILE"
 }
+
+# --- Log rotation ---
+rotate_log
+
+# --- Create temp directory ---
+mkdir -p "$TMP_DIR"
+chmod 700 "$TMP_DIR"
+
+# --- Singleton guard (atomic via mkdir) ---
+LOCK_DIR="$DATA_DIR/.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "Another instance is running — exiting"
+    exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$TMP_DIR"/udm-bandfix-* "$TMP_DIR"/mongo_ip.txt "$TMP_DIR"/ssh_*.txt "$TMP_DIR"/known_hosts.tmp' EXIT
+
+# --- Load config ---
+[ -f "$CONFIG" ] || die "Config not found: $CONFIG (run install.sh first)"
+# shellcheck source=/dev/null
+source "$CONFIG"
+: "${SSH_USER:?CONFIG missing SSH_USER}"
+validate_ssh_user "$SSH_USER"
 
 # --- Get current U5G-Max IP (cache-first: skip mongo on normal cron runs) ---
 LAST_IP=""
@@ -135,15 +154,17 @@ else
     _update_known_hosts "" "$U5G_IP"
 fi
 
-SSH_OPTS="-i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+SSH_OPTS="-i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
 # --- SSH connectivity check (if cached IP fails, refresh via MongoDB) ---
-if ! ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "exit 0" 2>/dev/null; then
+log "Checking SSH connectivity..."
+_chk="$TMP_DIR/ssh_chk.txt"
+if ! _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "exit 0"; then
     log "SSH failed at $U5G_IP — querying MongoDB for updated IP..."
     _fresh=$(_query_mongo_ip)
     if printf '%s' "$_fresh" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && \
        [ "$_fresh" != "$U5G_IP" ] && \
-       ssh $SSH_OPTS "${SSH_USER}@${_fresh}" "exit 0" 2>/dev/null; then
+       _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${_fresh}" "exit 0"; then
         _update_known_hosts "$U5G_IP" "$_fresh"
         U5G_IP="$_fresh"
     else
@@ -155,28 +176,26 @@ fi
 # --- Fetch ICCID live from modem (not from static config — survives SIM swaps) ---
 log "Reading ICCID from modem..."
 _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-sim.json"
+_ssh_out="$TMP_DIR/ssh_sim.txt"
 printf '%s\n' '{"method":"get-sim-state"}' > "$_tmpfile"
-_sim_out=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null) || true
-rm -f "$_tmpfile"
+_ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
+_sim_out=$(cat "$_ssh_out")
+rm -f "$_tmpfile" "$_ssh_out"
 ICCID=$(printf '%s' "$_sim_out" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['iccid'])" 2>/dev/null) || true
 
 if [ -z "$ICCID" ]; then
-    # Fallback to cached ICCID (SIM may still be initializing)
     [ -n "${ICCID_CACHE:-}" ] && ICCID="$ICCID_CACHE" || \
         die "Could not read ICCID from modem and no cache available"
     log "WARNING: Using cached ICCID (modem may still be initializing)"
 fi
 
-# Validate ICCID: must be 18-20 digits (strip non-printable first)
 ICCID=$(strip_nonprintable "$ICCID")
 if ! printf '%s' "$ICCID" | grep -qE '^[0-9]{18,20}$'; then
     die "Invalid ICCID: '$ICCID'"
 fi
 log "ICCID: $ICCID"
 
-# Cache ICCID for next run in case modem is slow to initialize
 if [ "${ICCID_CACHE:-}" != "$ICCID" ]; then
-    # Update the config file with the new cached ICCID
     if grep -q "^ICCID_CACHE=" "$CONFIG" 2>/dev/null; then
         sed -i "s/^ICCID_CACHE=.*/ICCID_CACHE=\"$ICCID\"/" "$CONFIG"
     else
@@ -187,26 +206,32 @@ fi
 # --- Fetch current band configuration ---
 log "Fetching current band config..."
 _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-get.json"
+_ssh_out="$TMP_DIR/ssh_get.txt"
 printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
-CURRENT=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null) || \
-    { rm -f "$_tmpfile"; die "get-radio-pref failed"; }
-rm -f "$_tmpfile"
+_ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
+    { rm -f "$_tmpfile" "$_ssh_out"; die "get-radio-pref failed"; }
+CURRENT=$(cat "$_ssh_out")
+rm -f "$_tmpfile" "$_ssh_out"
 log "Current: $CURRENT"
 
 # --- Fetch current RAT mode ---
 _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat-st.json"
+_ssh_out="$TMP_DIR/ssh_rat_st.txt"
 printf '%s\n' '{"method":"get-radio-status"}' > "$_tmpfile"
-RAT_STATUS=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null) || true
-rm -f "$_tmpfile"
+_ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
+RAT_STATUS=$(cat "$_ssh_out")
+rm -f "$_tmpfile" "$_ssh_out"
 RAT_MODE=$(printf '%s' "$RAT_STATUS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('result',{}).get('rat-mode-active',''))" 2>/dev/null) || true
 RAT_MODE=$(strip_nonprintable "$RAT_MODE")
 
 if [ "$RAT_MODE" = "WCDMA" ]; then
     log "WARNING: WCDMA detected — modem stuck on 3G, forcing reregistration to 4G/5G"
     _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat.json"
+    _ssh_out="$TMP_DIR/ssh_rat_set.txt"
     printf '%s\n' '{"method":"set-radio-pref","params":{"iccid":"'"$ICCID"'","mode":"5gnr,lte"}}' > "$_tmpfile"
-    RESULT=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile") || true
-    rm -f "$_tmpfile"
+    _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
+    RESULT=$(cat "$_ssh_out")
+    rm -f "$_tmpfile" "$_ssh_out"
     if echo "$RESULT" | grep -q '"result":{}'; then
         log "SUCCESS: RAT mode reconfiguration triggered"
     else
@@ -214,23 +239,25 @@ if [ "$RAT_MODE" = "WCDMA" ]; then
     fi
     log "Waiting 60s for modem to reregister..."
     sleep 60
-    # Re-fetch RAT mode
     _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat-st2.json"
+    _ssh_out="$TMP_DIR/ssh_rat_st2.txt"
     printf '%s\n' '{"method":"get-radio-status"}' > "$_tmpfile"
-    RAT_STATUS=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null) || true
-    rm -f "$_tmpfile"
+    _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
+    RAT_STATUS=$(cat "$_ssh_out")
+    rm -f "$_tmpfile" "$_ssh_out"
     RAT_MODE=$(printf '%s' "$RAT_STATUS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('result',{}).get('rat-mode-active',''))" 2>/dev/null) || true
     RAT_MODE=$(strip_nonprintable "$RAT_MODE")
     if [ "$RAT_MODE" = "WCDMA" ]; then
         log "WCDMA persists after reregistration — modem may need manual intervention, skipping band fix this run"
         exit 0
     fi
-    # Re-fetch band config
     _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-get2.json"
+    _ssh_out="$TMP_DIR/ssh_get2.txt"
     printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
-    CURRENT=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null) || \
-        { rm -f "$_tmpfile"; die "get-radio-pref failed"; }
-    rm -f "$_tmpfile"
+    _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
+        { rm -f "$_tmpfile" "$_ssh_out"; die "get-radio-pref failed"; }
+    CURRENT=$(cat "$_ssh_out")
+    rm -f "$_tmpfile" "$_ssh_out"
     log "Current: $CURRENT"
 fi
 
@@ -267,7 +294,6 @@ try:
             print(m)
     sys.exit(0)
 except Exception as e:
-    # Log full JSON for debugging firmware format changes
     print(f"Parse error: {e} — raw input: {sys.argv[1][:200]}", file=sys.stderr)
     sys.exit(1)
 PYEOF
@@ -291,12 +317,13 @@ PAYLOAD=$(printf \
     '{"method":"set-radio-pref","params":{"iccid":"%s","lte_band":"%s","nr5g_sa_band":"%s","nr5g_nsa_band":"%s"}}' \
     "$ICCID" "$LTE_REQUIRED" "$NR5G_SA_REQUIRED" "$NR5G_NSA_REQUIRED")
 
-# Write to temp file in /data/udm-bandfix/tmp/ and feed as stdin through SSH
 _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N).json"
+_ssh_out="$TMP_DIR/ssh_set.txt"
 printf '%s\n' "$PAYLOAD" > "$_tmpfile"
-RESULT=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile") || \
-    die "set-radio-pref command failed"
-rm -f "$_tmpfile"
+_ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
+    { rm -f "$_tmpfile" "$_ssh_out"; die "set-radio-pref command failed"; }
+RESULT=$(cat "$_ssh_out")
+rm -f "$_tmpfile" "$_ssh_out"
 
 if echo "$RESULT" | grep -q '"result":{}'; then
     log "SUCCESS: Band configuration applied"
@@ -307,9 +334,12 @@ fi
 # --- Verify ---
 log "Verifying..."
 _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-verify.json"
+_ssh_out="$TMP_DIR/ssh_verify.txt"
 printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
-VERIFY=$(ssh $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" 2>/dev/null)
-rm -f "$_tmpfile"
+_ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
+    die "verify get-radio-pref failed"
+VERIFY=$(cat "$_ssh_out")
+rm -f "$_tmpfile" "$_ssh_out"
 REMAINING=$(check_compliance "$VERIFY")
 if [ -n "$REMAINING" ]; then
     die "Fix applied but config still non-compliant:$REMAINING"

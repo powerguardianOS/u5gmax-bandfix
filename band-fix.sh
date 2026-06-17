@@ -174,11 +174,15 @@ _chk="$TMP_DIR/ssh_chk.txt"
 if ! _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "exit 0"; then
     log "SSH failed at $U5G_IP — querying MongoDB for updated IP..."
     _fresh=$(_query_mongo_ip)
-    if printf '%s' "$_fresh" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && \
-       [ "$_fresh" != "$U5G_IP" ] && \
-       _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${_fresh}" "exit 0"; then
-        _update_known_hosts "$U5G_IP" "$_fresh"
-        U5G_IP="$_fresh"
+    if printf '%s' "$_fresh" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        if [ "$_fresh" != "$U5G_IP" ]; then
+            _update_known_hosts "$U5G_IP" "$_fresh"
+            U5G_IP="$_fresh"
+        fi
+        if ! _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "exit 0"; then
+            log "WARNING: SSH to U5G-Max failed — device offline or key not installed (re-run install.sh)"
+            exit 0
+        fi
     else
         log "WARNING: SSH to U5G-Max failed — device offline or key not installed (re-run install.sh)"
         exit 0

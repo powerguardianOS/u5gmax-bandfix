@@ -87,10 +87,13 @@ validate_ssh_user "$SSH_USER"
 
 # --- Get current U5G-Max IP (changes on reboot) ---
 log "Querying MongoDB for U5G-Max IP..."
-_t0=$(date +%s)
-U5G_IP=$(timeout 30 mongo --quiet localhost:27117/ace \
-    --eval "print(db.device.findOne({model:'UMBBE630'}).ip)" < /dev/null 2>/dev/null | tr -d '\r\n') || true
-log "DEBUG: mongo done in $(( $(date +%s) - _t0 ))s, result='$U5G_IP'"
+_mongo_out="$TMP_DIR/mongo_ip.txt"
+timeout 30 mongo --quiet localhost:27117/ace \
+    --eval "print(db.device.findOne({model:'UMBBE630'}).ip)" \
+    < /dev/null > "$_mongo_out" 2>/dev/null || true
+U5G_IP=$(tr -d '\r\n' < "$_mongo_out")
+rm -f "$_mongo_out"
+log "DEBUG: mongo done, result='$U5G_IP'"
 
 [ -z "$U5G_IP" ] && die "MongoDB query timed out or failed — U5G-Max IP unavailable"
 [ "$U5G_IP" = "null" ] && die "U5G-Max (UMBBE630) not found in MongoDB — is the modem adopted?"

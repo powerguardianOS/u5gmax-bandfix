@@ -33,7 +33,7 @@ log() {
     msg=$(strip_nonprintable "$*")
     line="$(printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg")"
     printf '%s\n' "$line" >> "$LOG_FILE"
-    [ -t 1 ] && printf '%s\n' "$line"
+    [ -t 1 ] && printf '%s\n' "$line" || true
 }
 
 die() {

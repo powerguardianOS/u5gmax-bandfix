@@ -94,7 +94,7 @@ The ICCID of the active SIM is required by `uiwwand-ctl set-radio-pref`. It's re
 ## Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/royrijpma/u5gmax-bandfix/main/install.sh | bash
 ```
 
 Run as root on the Cloud Gateway. The installer will:
@@ -111,7 +111,7 @@ Run as root on the Cloud Gateway. The installer will:
 ### Local install (from cloned repo)
 
 ```bash
-git clone https://github.com/powerguardianOS/u5gmax-bandfix
+git clone https://github.com/royrijpma/u5gmax-bandfix
 cd u5gmax-bandfix
 bash install.sh
 ```

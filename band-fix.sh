@@ -146,27 +146,37 @@ _reinstall_key() {
         return 1
     fi
 
-    local _pw_out="$TMP_DIR/reinstall_pw.txt"
-    local _pass="" _attempt _mpid _mkpid
-    for _attempt in 1 2; do
-        : > "$_pw_out"
-        mongo --quiet --connectTimeoutMS 10000 --socketTimeoutMS 10000 \
-            localhost:27117/ace \
-            --eval 'var d=db.setting.findOne({key:"mgmt"}); print(d ? d.x_ssh_password : "null")' \
-            < /dev/null > "$_pw_out" 2>/dev/null &
-        _mpid=$!
-        ( sleep 30 && kill -9 "$_mpid" 2>/dev/null ) &
-        _mkpid=$!
-        { wait "$_mpid" 2>/dev/null; } || true
-        kill "$_mkpid" 2>/dev/null; wait "$_mkpid" 2>/dev/null || true
-        _pass=$(tr -d '\r\n' < "$_pw_out")
-        rm -f "$_pw_out"
-        [ -n "$_pass" ] && [ "$_pass" != "null" ] && break
-        [ "$_attempt" -eq 1 ] && log "MongoDB password query returned empty — retrying in 10s..." && sleep 10
-    done
+    # Try cached password from config first (written by install.sh, no MongoDB needed)
+    local _pass=""
+    if [ -f "$CONFIG" ]; then
+        _pass=$(. "$CONFIG" 2>/dev/null; printf '%s' "${SSH_PASS:-}")
+    fi
+
+    # Fall back to MongoDB if cache is missing or empty
+    if [ -z "$_pass" ] || [ "$_pass" = "null" ]; then
+        log "No cached SSH password in config — querying MongoDB..."
+        local _pw_out="$TMP_DIR/reinstall_pw.txt"
+        local _attempt _mpid _mkpid
+        for _attempt in 1 2; do
+            : > "$_pw_out"
+            mongo --quiet --connectTimeoutMS 10000 --socketTimeoutMS 10000 \
+                localhost:27117/ace \
+                --eval 'var d=db.setting.findOne({key:"mgmt"}); print(d ? d.x_ssh_password : "null")' \
+                < /dev/null > "$_pw_out" 2>/dev/null &
+            _mpid=$!
+            ( sleep 30 && kill -9 "$_mpid" 2>/dev/null ) &
+            _mkpid=$!
+            { wait "$_mpid" 2>/dev/null; } || true
+            kill "$_mkpid" 2>/dev/null; wait "$_mkpid" 2>/dev/null || true
+            _pass=$(tr -d '\r\n' < "$_pw_out")
+            rm -f "$_pw_out"
+            [ -n "$_pass" ] && [ "$_pass" != "null" ] && break
+            [ "$_attempt" -eq 1 ] && log "MongoDB password query returned empty — retrying in 10s..." && sleep 10
+        done
+    fi
 
     if [ -z "$_pass" ] || [ "$_pass" = "null" ]; then
-        log "Could not retrieve controller SSH password from MongoDB — cannot self-heal"
+        log "Could not retrieve controller SSH password — cannot self-heal (re-run install.sh)"
         return 1
     fi
 
@@ -256,17 +266,21 @@ fi
 
 SSH_OPTS="-i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
 
-# --- SSH connectivity check (if cached IP fails: refresh IP, then self-heal key) ---
+# --- SSH connectivity check (if cached IP fails: poll MongoDB for new IP, then self-heal key) ---
 log "Checking SSH connectivity..."
 _chk="$TMP_DIR/ssh_chk.txt"
 if ! _ssh_bg "$_chk" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "exit 0"; then
-    log "SSH failed at $U5G_IP — querying MongoDB for updated IP..."
-    _fresh=$(_query_mongo_ip) || true
-    if [ -z "$_fresh" ] || [ "$_fresh" = "null" ]; then
-        log "MongoDB IP query returned empty — retrying in 10s..."
-        sleep 10
+    log "SSH failed at $U5G_IP — polling MongoDB for updated IP (up to 5 attempts)..."
+    _fresh="" _poll=1
+    while [ "$_poll" -le 5 ]; do
         _fresh=$(_query_mongo_ip) || true
-    fi
+        if printf '%s' "$_fresh" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+            break
+        fi
+        log "MongoDB IP query returned empty (attempt $_poll/5) — retrying in 15s..."
+        sleep 15
+        _poll=$((_poll + 1))
+    done
     if printf '%s' "$_fresh" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' && \
             [ "$_fresh" != "$U5G_IP" ]; then
         _update_known_hosts "$U5G_IP" "$_fresh"

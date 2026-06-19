@@ -153,6 +153,7 @@ msg "Writing config file..."
 cat > "$CONFIG" << EOF
 # udm-bandfix config — written by install.sh $(date)
 SSH_USER="$SSH_USER"
+SSH_PASS="$SSH_PASS"
 ICCID_CACHE="$ICCID"
 EOF
 chmod 600 "$CONFIG"

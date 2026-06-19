@@ -171,6 +171,10 @@ This removes the cron job, all files in `/data/u5gmax-bandfix/`, and the SSH key
 
 MIT — see [LICENSE](LICENSE)
 
+## Built with AI
+
+This tool was entirely vibe-coded with [Claude](https://claude.ai) — from architecture to debugging the UCG Fiber cron environment quirks. Every script, fix, and edge case was developed through conversation.
+
 ---
 
 *Not affiliated with Ubiquiti or Odido. Use at your own risk.*  

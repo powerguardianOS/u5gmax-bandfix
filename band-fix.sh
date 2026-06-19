@@ -147,19 +147,23 @@ _reinstall_key() {
     fi
 
     local _pw_out="$TMP_DIR/reinstall_pw.txt"
-    : > "$_pw_out"
-    mongo --quiet --connectTimeoutMS 10000 --socketTimeoutMS 10000 \
-        localhost:27117/ace \
-        --eval "print(db.setting.findOne({key:'mgmt'}).x_ssh_password)" \
-        < /dev/null > "$_pw_out" 2>/dev/null &
-    local _mpid=$!
-    ( sleep 30 && kill -9 "$_mpid" 2>/dev/null ) &
-    local _mkpid=$!
-    { wait "$_mpid" 2>/dev/null; } || true
-    kill "$_mkpid" 2>/dev/null; wait "$_mkpid" 2>/dev/null || true
-    local _pass
-    _pass=$(tr -d '\r\n' < "$_pw_out")
-    rm -f "$_pw_out"
+    local _pass="" _attempt _mpid _mkpid
+    for _attempt in 1 2; do
+        : > "$_pw_out"
+        mongo --quiet --connectTimeoutMS 10000 --socketTimeoutMS 10000 \
+            localhost:27117/ace \
+            --eval 'var d=db.setting.findOne({key:"mgmt"}); print(d ? d.x_ssh_password : "null")' \
+            < /dev/null > "$_pw_out" 2>/dev/null &
+        _mpid=$!
+        ( sleep 30 && kill -9 "$_mpid" 2>/dev/null ) &
+        _mkpid=$!
+        { wait "$_mpid" 2>/dev/null; } || true
+        kill "$_mkpid" 2>/dev/null; wait "$_mkpid" 2>/dev/null || true
+        _pass=$(tr -d '\r\n' < "$_pw_out")
+        rm -f "$_pw_out"
+        [ -n "$_pass" ] && [ "$_pass" != "null" ] && break
+        [ "$_attempt" -eq 1 ] && log "MongoDB password query returned empty — retrying in 10s..." && sleep 10
+    done
 
     if [ -z "$_pass" ] || [ "$_pass" = "null" ]; then
         log "Could not retrieve controller SSH password from MongoDB — cannot self-heal"

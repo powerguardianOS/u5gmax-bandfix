@@ -1,5 +1,5 @@
 #!/bin/bash
-# udm-bandfix: Enforce Odido NL band restrictions on U5G-Max from Cloud Gateway
+# u5gmax-bandfix: Enforce Odido NL band restrictions on U5G-Max from Cloud Gateway
 # Source: Odido 5G Internet hardware specificaties en voorwaarden
 # Required active bands: LTE B1/B3/B7/B38, NR n1/n3/n7/n38/n78
 # Forbidden bands (must be disabled): B8, B20, B28, n8, n20, n28
@@ -7,7 +7,7 @@
 set -euo pipefail
 exec </dev/null
 
-DATA_DIR="/data/udm-bandfix"
+DATA_DIR="/data/u5gmax-bandfix"
 TMP_DIR="$DATA_DIR/tmp"
 LOG_FILE="$DATA_DIR/band-fix.log"
 CONFIG="$DATA_DIR/config"
@@ -235,7 +235,7 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     log "Another instance is running — exiting"
     exit 0
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$TMP_DIR"/udm-bandfix-* "$TMP_DIR"/mongo_ip.txt "$TMP_DIR"/ssh_*.txt "$TMP_DIR"/ssh_bg_stdin_* "$TMP_DIR"/known_hosts.tmp "$TMP_DIR"/reinstall_*' EXIT
+trap 'rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$TMP_DIR"/u5gmax-bandfix-* "$TMP_DIR"/mongo_ip.txt "$TMP_DIR"/ssh_*.txt "$TMP_DIR"/ssh_bg_stdin_* "$TMP_DIR"/known_hosts.tmp "$TMP_DIR"/reinstall_*' EXIT
 
 # --- Load config ---
 [ -f "$CONFIG" ] || die "Config not found: $CONFIG (run install.sh first)"
@@ -299,7 +299,7 @@ fi
 
 # --- Fetch ICCID live from modem (not from static config — survives SIM swaps) ---
 log "Reading ICCID from modem..."
-_tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-sim.json"
+_tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-sim.json"
 _ssh_out="$TMP_DIR/ssh_sim.txt"
 printf '%s\n' '{"method":"get-sim-state"}' > "$_tmpfile"
 _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
@@ -329,7 +329,7 @@ fi
 
 # --- Fetch current band configuration ---
 log "Fetching current band config..."
-_tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-get.json"
+_tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-get.json"
 _ssh_out="$TMP_DIR/ssh_get.txt"
 printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
 _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
@@ -344,7 +344,7 @@ fi
 log "Current: $CURRENT"
 
 # --- Fetch current RAT mode ---
-_tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat-st.json"
+_tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-rat-st.json"
 _ssh_out="$TMP_DIR/ssh_rat_st.txt"
 printf '%s\n' '{"method":"get-radio-status"}' > "$_tmpfile"
 _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
@@ -355,7 +355,7 @@ RAT_MODE=$(strip_nonprintable "$RAT_MODE")
 
 if [ "$RAT_MODE" = "WCDMA" ]; then
     log "WARNING: WCDMA detected — modem stuck on 3G, forcing reregistration to 4G/5G"
-    _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat.json"
+    _tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-rat.json"
     _ssh_out="$TMP_DIR/ssh_rat_set.txt"
     printf '%s\n' '{"method":"set-radio-pref","params":{"iccid":"'"$ICCID"'","mode":"5gnr,lte"}}' > "$_tmpfile"
     _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
@@ -368,7 +368,7 @@ if [ "$RAT_MODE" = "WCDMA" ]; then
     fi
     log "Waiting 60s for modem to reregister..."
     sleep 60
-    _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-rat-st2.json"
+    _tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-rat-st2.json"
     _ssh_out="$TMP_DIR/ssh_rat_st2.txt"
     printf '%s\n' '{"method":"get-radio-status"}' > "$_tmpfile"
     _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || true
@@ -380,7 +380,7 @@ if [ "$RAT_MODE" = "WCDMA" ]; then
         log "WCDMA persists after reregistration — modem may need manual intervention, skipping band fix this run"
         exit 0
     fi
-    _tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-get2.json"
+    _tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-get2.json"
     _ssh_out="$TMP_DIR/ssh_get2.txt"
     printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
     _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
@@ -450,7 +450,7 @@ PAYLOAD=$(printf \
     '{"method":"set-radio-pref","params":{"iccid":"%s","lte_band":"%s","nr5g_sa_band":"%s","nr5g_nsa_band":"%s"}}' \
     "$ICCID" "$LTE_REQUIRED" "$NR5G_SA_REQUIRED" "$NR5G_NSA_REQUIRED")
 
-_tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N).json"
+_tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N).json"
 _ssh_out="$TMP_DIR/ssh_set.txt"
 printf '%s\n' "$PAYLOAD" > "$_tmpfile"
 _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \
@@ -466,7 +466,7 @@ fi
 
 # --- Verify ---
 log "Verifying..."
-_tmpfile="$TMP_DIR/udm-bandfix-$(date +%s%N)-verify.json"
+_tmpfile="$TMP_DIR/u5gmax-bandfix-$(date +%s%N)-verify.json"
 _ssh_out="$TMP_DIR/ssh_verify.txt"
 printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}\n' "$ICCID" > "$_tmpfile"
 _ssh_bg "$_ssh_out" $SSH_OPTS "${SSH_USER}@${U5G_IP}" "uiwwand-ctl" < "$_tmpfile" || \

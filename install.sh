@@ -1,16 +1,16 @@
 #!/bin/bash
-# udm-bandfix installer
-# Usage: curl -sSL https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/install.sh | bash
+# u5gmax-bandfix installer
+# Usage: curl -sSL https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/install.sh | bash
 
 set -euo pipefail
 
-DATA_DIR="/data/udm-bandfix"
+DATA_DIR="/data/u5gmax-bandfix"
 CONFIG="$DATA_DIR/config"
 SSH_KEY="$DATA_DIR/id_ed25519"
 KNOWN_HOSTS="$DATA_DIR/known_hosts"
 LOG_FILE="$DATA_DIR/band-fix.log"
-CRON_FILE="/etc/cron.d/udm-bandfix"
-SCRIPT_SRC="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/band-fix.sh"
+CRON_FILE="/etc/cron.d/u5gmax-bandfix"
+SCRIPT_SRC="https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/band-fix.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -25,7 +25,7 @@ _PASS_FILE=""
 trap '[ -n "$_PASS_FILE" ] && rm -f "$_PASS_FILE"; [ -d "$_TMP_DIR" ] && rmdir "$_TMP_DIR" 2>/dev/null || true' EXIT
 
 msg ""
-msg "=== udm-bandfix installer ==="
+msg "=== u5gmax-bandfix installer ==="
 msg ""
 
 # --- Prerequisite checks ---
@@ -90,7 +90,7 @@ msg "Generating SSH key..."
 if [ -f "$SSH_KEY" ]; then
     warn "SSH key already exists at $SSH_KEY — skipping keygen"
 else
-    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -q -C "udm-bandfix@$(hostname)"
+    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -q -C "u5gmax-bandfix@$(hostname)"
     ok "SSH key generated: $SSH_KEY"
 fi
 # Always enforce correct permissions
@@ -151,7 +151,7 @@ ok "ICCID: $ICCID"
 # --- Write config ---
 msg "Writing config file..."
 cat > "$CONFIG" << EOF
-# udm-bandfix config — written by install.sh $(date)
+# u5gmax-bandfix config — written by install.sh $(date)
 SSH_USER="$SSH_USER"
 SSH_PASS="$SSH_PASS"
 ICCID_CACHE="$ICCID"
@@ -179,32 +179,32 @@ ok "band-fix.sh installed: $SCRIPT_DEST"
 # --- Install cron job ---
 msg "Installing cron job..."
 cat > "$CRON_FILE" << 'EOF'
-# udm-bandfix: Odido NL band enforcement for U5G-Max
+# u5gmax-bandfix: Odido NL band enforcement for U5G-Max
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 # On boot: poll until modem online, then apply fix (also restores this cron if wiped)
-@reboot root /data/udm-bandfix/on-boot.sh >> /data/udm-bandfix/band-fix.log 2>&1
+@reboot root /data/u5gmax-bandfix/on-boot.sh >> /data/u5gmax-bandfix/band-fix.log 2>&1
 # Hourly check to catch controller-pushed band resets (offset 5min to avoid UniFi controller's own :00 MongoDB activity)
-5 * * * * root /data/udm-bandfix/band-fix.sh >> /data/udm-bandfix/band-fix.log 2>&1
+5 * * * * root /data/u5gmax-bandfix/band-fix.sh >> /data/u5gmax-bandfix/band-fix.log 2>&1
 EOF
 chmod 644 "$CRON_FILE"
 ok "Cron job installed: $CRON_FILE (on-boot + hourly)"
 
-# --- Install udm-bandfix CLI command ---
-msg "Installing udm-bandfix command..."
-CLI_DEST="/usr/local/sbin/udm-bandfix"
-CLI_SRC="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/udm-bandfix.sh"
-if [ -f "$INSTALLER_DIR/udm-bandfix.sh" ]; then
-    cp "$INSTALLER_DIR/udm-bandfix.sh" "$CLI_DEST"
+# --- Install u5gmax-bandfix CLI command ---
+msg "Installing u5gmax-bandfix command..."
+CLI_DEST="/usr/local/sbin/u5gmax-bandfix"
+CLI_SRC="https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/u5gmax-bandfix.sh"
+if [ -f "$INSTALLER_DIR/u5gmax-bandfix.sh" ]; then
+    cp "$INSTALLER_DIR/u5gmax-bandfix.sh" "$CLI_DEST"
 elif command -v curl >/dev/null 2>&1; then
-    curl -sSL "$CLI_SRC" -o "$CLI_DEST" || warn "Could not download udm-bandfix.sh"
+    curl -sSL "$CLI_SRC" -o "$CLI_DEST" || warn "Could not download u5gmax-bandfix.sh"
 fi
-[ -f "$CLI_DEST" ] && chmod +x "$CLI_DEST" && ok "CLI installed: type 'udm-bandfix' to manage"
+[ -f "$CLI_DEST" ] && chmod +x "$CLI_DEST" && ok "CLI installed: type 'u5gmax-bandfix' to manage"
 
 # --- Install on-boot.sh to /data/ ---
 msg "Installing on-boot.sh..."
 ON_BOOT_DEST="$DATA_DIR/on-boot.sh"
-ON_BOOT_SRC_URL="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/on-boot.sh"
+ON_BOOT_SRC_URL="https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/on-boot.sh"
 if [ -f "$INSTALLER_DIR/on-boot.sh" ]; then
     cp "$INSTALLER_DIR/on-boot.sh" "$ON_BOOT_DEST"
 elif command -v curl >/dev/null 2>&1; then
@@ -215,7 +215,7 @@ fi
 # --- Install uninstall.sh to /data/ ---
 msg "Installing uninstall.sh..."
 UNINSTALL_DEST="$DATA_DIR/uninstall.sh"
-UNINSTALL_SRC_URL="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main/uninstall.sh"
+UNINSTALL_SRC_URL="https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main/uninstall.sh"
 if [ -f "$INSTALLER_DIR/uninstall.sh" ]; then
     cp "$INSTALLER_DIR/uninstall.sh" "$UNINSTALL_DEST"
 elif command -v curl >/dev/null 2>&1; then
@@ -230,7 +230,7 @@ msg "Running initial band fix..."
 
 # --- Summary ---
 printf '\n'
-ok "udm-bandfix installed!"
+ok "u5gmax-bandfix installed!"
 printf '\n'
 printf '  Config:      %s\n' "$CONFIG"
 printf '  Log file:    %s\n' "$LOG_FILE"
@@ -240,5 +240,5 @@ printf '  ICCID:       %s\n' "$ICCID"
 printf '\n'
 printf 'Monitor:       tail -f %s\n' "$LOG_FILE"
 printf 'Manual run:    %s\n' "$SCRIPT_DEST"
-printf 'Uninstall:     bash /data/udm-bandfix/uninstall.sh\n'
+printf 'Uninstall:     bash /data/u5gmax-bandfix/uninstall.sh\n'
 printf '\n'

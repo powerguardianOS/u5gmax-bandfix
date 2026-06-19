@@ -1,16 +1,16 @@
 #!/bin/bash
-# udm-bandfix — interactive CLI for managing Odido NL band restrictions
-# Installed to /usr/local/sbin/udm-bandfix
+# u5gmax-bandfix — interactive CLI for managing Odido NL band restrictions
+# Installed to /usr/local/sbin/u5gmax-bandfix
 
 set -euo pipefail
 
 VERSION="1.1.0"
-DATA_DIR="/data/udm-bandfix"
+DATA_DIR="/data/u5gmax-bandfix"
 CONFIG="$DATA_DIR/config"
 SSH_KEY="$DATA_DIR/id_ed25519"
 KNOWN_HOSTS="$DATA_DIR/known_hosts"
 LOG_FILE="$DATA_DIR/band-fix.log"
-CRON_FILE="/etc/cron.d/udm-bandfix"
+CRON_FILE="/etc/cron.d/u5gmax-bandfix"
 BAND_FIX="$DATA_DIR/band-fix.sh"
 
 # Colors
@@ -60,7 +60,7 @@ get_last_result() {
 cron_status() {
     if [ -f "$CRON_FILE" ]; then
         local min
-        min=$(grep -E "^[0-9]+ \* \* \* \* root /data/udm-bandfix/band-fix" "$CRON_FILE" | awk '{print $1}' | head -1)
+        min=$(grep -E "^[0-9]+ \* \* \* \* root /data/u5gmax-bandfix/band-fix" "$CRON_FILE" | awk '{print $1}' | head -1)
         printf 'active (hourly at :%02d)' "${min:-0}"
     else
         echo "NOT INSTALLED"
@@ -90,7 +90,7 @@ print_header() {
     clear
     printf "${C}"
     printf '╔══════════════════════════════════════════════╗\n'
-    printf '║          udm-bandfix  v%-5s                 ║\n' "$VERSION"
+    printf '║          u5gmax-bandfix  v%-5s                 ║\n' "$VERSION"
     printf '║     Odido NL Band Fix — UniFi U5G-Max       ║\n'
     printf '╠══════════════════════════════════════════════╣\n'
     printf "${NC}"
@@ -301,10 +301,10 @@ action_reinstall_key() {
 }
 
 action_update() {
-    local BASE="https://raw.githubusercontent.com/powerguardianOS/udm-bandfix/main"
+    local BASE="https://raw.githubusercontent.com/powerguardianOS/u5gmax-bandfix/main"
     local ok=0 fail=0
 
-    printf "\n${Y}Updating all udm-bandfix scripts from GitHub...${NC}\n\n"
+    printf "\n${Y}Updating all u5gmax-bandfix scripts from GitHub...${NC}\n\n"
 
     if ! command -v curl >/dev/null 2>&1; then
         printf "${R}curl not available.${NC}\n"; pause; return
@@ -325,7 +325,7 @@ action_update() {
     _update_file "$BASE/band-fix.sh"    "$DATA_DIR/band-fix.sh"    "+x"
     _update_file "$BASE/on-boot.sh"     "$DATA_DIR/on-boot.sh"     "+x"
     _update_file "$BASE/uninstall.sh"   "$DATA_DIR/uninstall.sh"   "+x"
-    _update_file "$BASE/udm-bandfix.sh" "/usr/local/sbin/udm-bandfix" "+x"
+    _update_file "$BASE/u5gmax-bandfix.sh" "/usr/local/sbin/u5gmax-bandfix" "+x"
 
     printf "\n"
     [ "$fail" -eq 0 ] && printf "${G}✓ All scripts updated.${NC}\n" || \
@@ -334,7 +334,7 @@ action_update() {
 }
 
 action_uninstall() {
-    printf "\n${R}${BOLD}WARNING: This will remove udm-bandfix completely.${NC}\n"
+    printf "\n${R}${BOLD}WARNING: This will remove u5gmax-bandfix completely.${NC}\n"
     printf "The U5G-Max will revert to all-bands on next reboot.\n\n"
     read -r -p "Type 'yes' to confirm: " CONFIRM
     [ "$CONFIRM" = "yes" ] || { printf "Cancelled.\n"; pause; return; }
@@ -342,12 +342,12 @@ action_uninstall() {
     local UNINSTALL
     UNINSTALL="$(dirname "$BAND_FIX")/uninstall.sh"
     # Try local uninstall.sh first, then fall back to same dir as this script
-    [ -f "$UNINSTALL" ] || UNINSTALL="/usr/local/sbin/udm-bandfix-uninstall"
+    [ -f "$UNINSTALL" ] || UNINSTALL="/usr/local/sbin/u5gmax-bandfix-uninstall"
 
     if [ -f "$UNINSTALL" ]; then
         bash "$UNINSTALL"
-        rm -f /usr/local/sbin/udm-bandfix
-        printf "\n${G}Done. udm-bandfix removed.${NC}\n"
+        rm -f /usr/local/sbin/u5gmax-bandfix
+        printf "\n${G}Done. u5gmax-bandfix removed.${NC}\n"
         exit 0
     else
         printf "${R}Uninstall script not found at %s${NC}\n" "$UNINSTALL"
@@ -356,7 +356,7 @@ action_uninstall() {
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-# Non-interactive mode: udm-bandfix check|status|logs|update|uninstall
+# Non-interactive mode: u5gmax-bandfix check|status|logs|update|uninstall
 if [ $# -gt 0 ]; then
     case "$1" in
         check)     action_force_check ;;
@@ -365,8 +365,8 @@ if [ $# -gt 0 ]; then
         update)    action_update ;;
         uninstall) action_uninstall ;;
         *)
-            printf "Usage: udm-bandfix [check|status|logs|update|uninstall]\n"
-            printf "       udm-bandfix          (interactive menu)\n"
+            printf "Usage: u5gmax-bandfix [check|status|logs|update|uninstall]\n"
+            printf "       u5gmax-bandfix          (interactive menu)\n"
             exit 1
             ;;
     esac

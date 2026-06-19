@@ -1,15 +1,15 @@
 #!/bin/bash
-# on-boot.sh — udm-bandfix boot-time band enforcement
+# on-boot.sh — u5gmax-bandfix boot-time band enforcement
 # Called via @reboot cron entry — not via on_boot.d (not available on UCG Fiber)
 # Waits for U5G-Max to appear in MongoDB, then runs immediate band fix.
 
 set -euo pipefail
 exec </dev/null
 
-SCRIPT_DEST="/data/udm-bandfix/band-fix.sh"
-CRON_FILE="/etc/cron.d/udm-bandfix"
-LOG_FILE="/data/udm-bandfix/band-fix.log"
-TMP_DIR="/data/udm-bandfix/tmp"
+SCRIPT_DEST="/data/u5gmax-bandfix/band-fix.sh"
+CRON_FILE="/etc/cron.d/u5gmax-bandfix"
+LOG_FILE="/data/u5gmax-bandfix/band-fix.log"
+TMP_DIR="/data/u5gmax-bandfix/tmp"
 
 log() {
     printf '[%s] on-boot: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
@@ -25,11 +25,11 @@ trap 'rm -f "$TMP_DIR/on-boot-ip.txt"' EXIT
 if [ ! -f "$CRON_FILE" ]; then
     log "Cron job missing — restoring..."
     cat > "$CRON_FILE" << 'EOF'
-# udm-bandfix: Odido NL band enforcement for U5G-Max
+# u5gmax-bandfix: Odido NL band enforcement for U5G-Max
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-@reboot root /data/udm-bandfix/on-boot.sh >> /data/udm-bandfix/band-fix.log 2>&1
-5 * * * * root /data/udm-bandfix/band-fix.sh >> /data/udm-bandfix/band-fix.log 2>&1
+@reboot root /data/u5gmax-bandfix/on-boot.sh >> /data/u5gmax-bandfix/band-fix.log 2>&1
+5 * * * * root /data/u5gmax-bandfix/band-fix.sh >> /data/u5gmax-bandfix/band-fix.log 2>&1
 EOF
     chmod 644 "$CRON_FILE"
     log "Cron job restored"

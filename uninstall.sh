@@ -1,17 +1,17 @@
 #!/bin/bash
-# udm-bandfix uninstaller
+# u5gmax-bandfix uninstaller
 
 set -euo pipefail
 
-DATA_DIR="/data/udm-bandfix"
-CRON_FILE="/etc/cron.d/udm-bandfix"
+DATA_DIR="/data/u5gmax-bandfix"
+CRON_FILE="/etc/cron.d/u5gmax-bandfix"
 SSH_KEY="$DATA_DIR/id_ed25519"
 KNOWN_HOSTS="$DATA_DIR/known_hosts"
 CONFIG="$DATA_DIR/config"
 
 [ "$(id -u)" -eq 0 ] || { echo "Must run as root" >&2; exit 1; }
 
-echo "=== udm-bandfix uninstaller ==="
+echo "=== u5gmax-bandfix uninstaller ==="
 echo ""
 
 # --- Remove SSH key from U5G-Max (best-effort, do this BEFORE deleting the key) ---
@@ -48,11 +48,11 @@ fi
 [ -f "$CRON_FILE" ] && rm -f "$CRON_FILE" && echo "Cron job removed"
 
 # --- Remove CLI command ---
-[ -f "/usr/local/sbin/udm-bandfix" ] && rm -f "/usr/local/sbin/udm-bandfix" && echo "CLI command removed"
+[ -f "/usr/local/sbin/u5gmax-bandfix" ] && rm -f "/usr/local/sbin/u5gmax-bandfix" && echo "CLI command removed"
 
 # --- Remove data directory ---
 [ -d "$DATA_DIR" ] && rm -rf "$DATA_DIR" && echo "Removed $DATA_DIR"
 
 echo ""
-echo "Done. udm-bandfix uninstalled."
+echo "Done. u5gmax-bandfix uninstalled."
 echo "Note: U5G-Max band configuration is NOT reverted — it will reset on next modem reboot."

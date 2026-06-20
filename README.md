@@ -118,6 +118,23 @@ bash install.sh
 
 ## Usage
 
+After installation, type `u5gmax-bandfix` in the shell to open the interactive menu:
+
+```
+╔══════════════════════════════════════════════╗
+║       u5gmax-bandfix — U5G-Max Band Fix      ║
+╠══════════════════════════════════════════════╣
+  1) Force band check now
+  2) Show current band status
+  3) Edit required bands
+  4) Show logs
+  5) Reinstall SSH key on U5G-Max
+  6) Update to latest version
+  7) Uninstall
+  0) Exit
+╚══════════════════════════════════════════════╝
+```
+
 ### Check logs
 
 ```bash

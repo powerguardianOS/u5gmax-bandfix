@@ -141,6 +141,28 @@ After installation, type `u5gmax-bandfix` in the shell to open the interactive m
 ╚══════════════════════════════════════════════╝
 ```
 
+You can also run commands directly from the shell without the menu:
+
+```bash
+u5gmax-bandfix check      # force band check
+u5gmax-bandfix status     # show band status
+u5gmax-bandfix logs       # show logs
+u5gmax-bandfix update     # update to latest version
+u5gmax-bandfix uninstall  # uninstall
+```
+
+### Self-healing after modem reboot
+
+After a modem reboot, the U5G-Max loses its SSH keys and host keys (tmpfs). The tool recovers automatically:
+
+1. **Cron** (band-fix.sh): detects SSH failure → rescans host key → reinstalls SSH key via sshpass → applies band fix
+2. **CLI** (option 2): detects SSH failure → rescans host key → reinstalls SSH key → shows band status with option to fix immediately
+
+If bands are non-compliant, option 2 asks:
+```
+Bands are non-compliant. Apply Odido fix now? [Y/n]
+```
+
 ### Check logs
 
 ```bash

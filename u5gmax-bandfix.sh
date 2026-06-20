@@ -197,38 +197,51 @@ PYEOF
 
 action_edit_bands() {
     load_config
-    printf "\n${Y}Edit required band configuration${NC}\n"
-    printf "${W}Current values (from Odido spec):${NC}\n"
-    printf "  LTE:      1,3,7,38\n"
-    printf "  NR5G SA:  1,3,7,38,78\n"
-    printf "  NR5G NSA: 1,3,7,38,78\n"
-    printf "\n${Y}Note:${NC} Odido requires B8/B20/B28 and n8/n20/n28 to be DISABLED.\n"
-    printf "Editing allows you to customize within those constraints.\n\n"
 
-    read -r -p "LTE bands     [1,3,7,38]: " INPUT_LTE
-    read -r -p "NR5G SA bands [1,3,7,38,78]: " INPUT_SA
-    read -r -p "NR5G NSA bands [1,3,7,38,78]: " INPUT_NSA
+    # Odido-required bands (always the baseline)
+    local BASE_LTE="1,3,7,38"
+    local BASE_SA="1,3,7,38,78"
+    local BASE_NSA="1,3,7,38,78"
 
-    INPUT_LTE="${INPUT_LTE:-1,3,7,38}"
-    INPUT_SA="${INPUT_SA:-1,3,7,38,78}"
-    INPUT_NSA="${INPUT_NSA:-1,3,7,38,78}"
+    printf "\n${Y}Disable extra bands${NC}\n"
+    printf "${W}Odido-required active bands (baseline):${NC}\n"
+    printf "  LTE:       B%s\n" "$(echo "$BASE_LTE" | sed 's/,/, B/g')"
+    printf "  NR5G SA:   n%s\n" "$(echo "$BASE_SA"  | sed 's/,/, n/g')"
+    printf "  NR5G NSA:  n%s\n" "$(echo "$BASE_NSA" | sed 's/,/, n/g')"
+    printf "\n${Y}Note:${NC} B8/B20/B28 and n8/n20/n28 are always disabled (Odido requirement).\n"
+    printf "Enter band numbers to additionally disable from the baseline (leave empty for none).\n\n"
 
-    # Validate: ensure forbidden bands are not included
-    local FORBIDDEN="8,20,28"
-    for band in 8 20 28; do
-        for val in "$INPUT_LTE" "$INPUT_SA" "$INPUT_NSA"; do
-            if echo ",$val," | grep -q ",$band,"; then
-                printf "${R}✗ Band %s is forbidden by Odido — cannot enable it.${NC}\n" "$band"
-                pause; return
+    read -r -p "Disable from LTE  (e.g. 38 to disable B38):   " DISABLE_LTE
+    read -r -p "Disable from NR5G (e.g. 78 to disable n78):   " DISABLE_NR
+
+    # Compute result: remove disabled bands from baseline
+    _remove_bands() {
+        local list="$1" remove="$2"
+        local result=""
+        local b
+        IFS=',' read -ra bands <<< "$list"
+        for b in "${bands[@]}"; do
+            b="${b// /}"
+            if ! echo ",$remove," | grep -q ",$b,"; then
+                result="${result:+$result,}$b"
             fi
         done
-    done
+        printf '%s' "$result"
+    }
 
-    printf "\nApply these bands?\n"
+    INPUT_LTE=$(_remove_bands "$BASE_LTE" "$DISABLE_LTE")
+    INPUT_SA=$(_remove_bands  "$BASE_SA"  "$DISABLE_NR")
+    INPUT_NSA=$(_remove_bands "$BASE_NSA" "$DISABLE_NR")
+
+    [ -z "$INPUT_LTE" ] && { printf "${R}✗ Cannot disable all LTE bands.${NC}\n"; pause; return; }
+    [ -z "$INPUT_SA" ]  && { printf "${R}✗ Cannot disable all NR5G SA bands.${NC}\n"; pause; return; }
+    [ -z "$INPUT_NSA" ] && { printf "${R}✗ Cannot disable all NR5G NSA bands.${NC}\n"; pause; return; }
+
+    printf "\n${W}Result:${NC}\n"
     printf "  LTE:      %s\n" "$INPUT_LTE"
     printf "  NR5G SA:  %s\n" "$INPUT_SA"
     printf "  NR5G NSA: %s\n" "$INPUT_NSA"
-    read -r -p "Confirm? [y/N] " CONFIRM
+    read -r -p "Apply? [y/N] " CONFIRM
     [[ "$CONFIRM" =~ ^[Yy]$ ]] || { printf "Cancelled.\n"; pause; return; }
 
     # Write custom bands to config

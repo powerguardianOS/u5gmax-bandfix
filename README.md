@@ -6,6 +6,23 @@ Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — 
 
 ---
 
+## Changelog
+
+### v1.1.0 (2026-06-20)
+- **Self-healing after modem reboot**: automatically rescans host key and reinstalls SSH key when modem tmpfs is wiped
+- **IP change recovery**: polls MongoDB for updated IP when SSH fails, handles Odido WAN IP shuffles
+- **Interactive CLI** (`u5gmax-bandfix`): menu with force check, band status, edit bands, logs, key reinstall, update, uninstall
+- **Band status with fix prompt**: option 2 detects non-compliant bands and offers to fix immediately
+- **Auto-update**: option 6 downloads latest scripts from GitHub and exits cleanly
+- **WCDMA recovery**: detects 3G fallback and forces reregistration to 4G/5G
+
+### v1.0.0 (2026-06-16)
+- Initial release: hourly cron enforcement of Odido band spec on UCG Fiber
+- Automated install via MongoDB credential lookup
+- SSH key-based auth, log rotation, singleton lock
+
+---
+
 ## The Problem
 
 Odido NL (formerly T-Mobile NL) publishes a hardware specification for all FWA (Fixed Wireless Access) equipment. It defines exactly which bands must be **active** and which must be permanently **disabled**:

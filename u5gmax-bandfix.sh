@@ -12,6 +12,7 @@ KNOWN_HOSTS="$DATA_DIR/known_hosts"
 LOG_FILE="$DATA_DIR/band-fix.log"
 CRON_FILE="/etc/cron.d/u5gmax-bandfix"
 BAND_FIX="$DATA_DIR/band-fix.sh"
+mkdir -p "$DATA_DIR/tmp" && chmod 700 "$DATA_DIR/tmp"
 
 # Colors
 R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'
@@ -204,7 +205,6 @@ action_band_status() {
 
     printf "\n${W}ICCID:${NC} %s\n\n" "$iccid"
 
-    mkdir -p "$DATA_DIR/tmp"
     local _tmpresult; _tmpresult=$(mktemp "$DATA_DIR/tmp/.status-XXXXXX")
     python3 - "$current" << PYEOF > "$_tmpresult"
 import json, sys

@@ -135,6 +135,35 @@ action_band_status() {
 
     printf "\n${Y}Querying U5G-Max band configuration...${NC}\n"
 
+    # Try SSH — if it fails, rescan host key (modem reboot regenerates host keys on tmpfs)
+    _try_ssh() {
+        local _ip="$1"
+        ssh $(ssh_opts) "${SSH_USER}@${_ip}" "exit 0" < /dev/null 2>/dev/null
+    }
+
+    if ! _try_ssh "$u5g_ip"; then
+        printf "${Y}SSH failed — rescanning host key (modem may have rebooted)...${NC}\n"
+        ssh-keyscan -T 10 "$u5g_ip" > "$KNOWN_HOSTS" 2>/dev/null || true
+        if ! _try_ssh "$u5g_ip"; then
+            printf "${Y}Still unreachable — waiting for modem to come online (max 5 min)...${NC}\n"
+            local attempt=1
+            while [ "$attempt" -le 10 ]; do
+                printf "  Attempt %d/10 — retrying in 30s...\r" "$attempt"
+                sleep 30
+                u5g_ip=$(get_ip)
+                [ -n "$u5g_ip" ] && [ "$u5g_ip" != "null" ] || { attempt=$((attempt+1)); continue; }
+                ssh-keyscan -T 10 "$u5g_ip" > "$KNOWN_HOSTS" 2>/dev/null || true
+                _try_ssh "$u5g_ip" && break
+                attempt=$((attempt+1))
+            done
+            if ! _try_ssh "$u5g_ip"; then
+                printf "\n${R}U5G-Max did not come online within 5 minutes.${NC}\n"
+                pause; return
+            fi
+        fi
+        printf "${G}Connected to %s${NC}\n" "$u5g_ip"
+    fi
+
     # Get live ICCID
     iccid=$(printf '{"method":"get-sim-state"}' \
         | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null \
@@ -143,24 +172,8 @@ action_band_status() {
     [ -z "$iccid" ] && { printf "${R}Could not read ICCID.${NC}\n"; pause; return; }
 
     current=$(printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$iccid" \
-        | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null) || true
-
-    if [ -z "$current" ]; then
-        printf "${Y}U5G-Max not reachable — waiting for it to come online (max 5 min)...${NC}\n"
-        local attempt=1
-        while [ "$attempt" -le 10 ]; do
-            printf "  Attempt %d/10 — retrying in 30s...\r" "$attempt"
-            sleep 30
-            u5g_ip=$(get_ip)
-            [ -n "$u5g_ip" ] && [ "$u5g_ip" != "null" ] || { attempt=$((attempt+1)); continue; }
-            current=$(printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$iccid" \
-                | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null) || true
-            [ -n "$current" ] && break
-            attempt=$((attempt+1))
-        done
-        [ -z "$current" ] && { printf "\n${R}U5G-Max did not come online within 5 minutes.${NC}\n"; pause; return; }
-        printf "\n${G}U5G-Max online at %s${NC}\n" "$u5g_ip"
-    fi
+        | ssh $(ssh_opts) "${SSH_USER}@${u5g_ip}" "uiwwand-ctl" 2>/dev/null) || \
+        { printf "${R}Could not read band config from modem.${NC}\n"; pause; return; }
 
     printf "\n${W}ICCID:${NC} %s\n\n" "$iccid"
 

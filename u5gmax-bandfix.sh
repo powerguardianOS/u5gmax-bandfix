@@ -204,8 +204,8 @@ action_band_status() {
 
     printf "\n${W}ICCID:${NC} %s\n\n" "$iccid"
 
-    local compliant
-    compliant=$(python3 - "$current" << 'PYEOF'
+    local _tmpresult; _tmpresult=$(mktemp "$DATA_DIR/tmp/.status-XXXXXX")
+    python3 - "$current" << PYEOF > "$_tmpresult"
 import json, sys
 
 REQUIRED = {
@@ -224,19 +224,16 @@ ok = True
 try:
     data = json.loads(sys.argv[1])
     result = data.get("result", {})
-
     labels = {
         "lte_band":      "LTE bands    ",
         "nr5g_sa_band":  "NR5G SA bands",
         "nr5g_nsa_band": "NR5G NSA bands",
     }
-
     for key, req in REQUIRED.items():
         val = result.get(key, "")
         actual = {int(b) for b in val.split(",") if b.strip().isdigit()} if val else set()
         forbidden_present = actual & FORBIDDEN
         matches_spec = actual == req
-
         if matches_spec:
             status = f"{GREEN}✓ Odido-compliant{NC}"
         elif forbidden_present:
@@ -245,19 +242,21 @@ try:
         else:
             status = f"{RED}✗ Non-compliant{NC}"
             ok = False
-
         print(f"  {BOLD}{labels[key]}:{NC} {val or '(empty)'}")
-        print(f"  {'':15}  → {status}")
+        print(f"               → {status}")
         print()
 except Exception as e:
     print(f"Parse error: {e}")
     ok = False
 
-print("OK" if ok else "NOK")
+import sys as _sys
+with open("$_tmpresult.ok", "w") as f:
+    f.write("1" if ok else "0")
 PYEOF
-)
-    printf '%s\n' "$compliant" | grep -v "^OK$\|^NOK$"
-    if printf '%s\n' "$compliant" | grep -q "^NOK$"; then
+    cat "$_tmpresult"
+    local _ok; _ok=$(cat "$_tmpresult.ok" 2>/dev/null || echo "0")
+    rm -f "$_tmpresult" "$_tmpresult.ok"
+    if [ "$_ok" = "0" ]; then
         read -r -p "  Bands are non-compliant. Apply Odido fix now? [Y/n] " _confirm
         case "${_confirm:-Y}" in
             [Yy]|"") bash "$BAND_FIX" && printf "\n${G}✓ Fix applied.${NC}\n" || printf "\n${R}✗ Fix failed — see logs.${NC}\n" ;;

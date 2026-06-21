@@ -15,7 +15,8 @@ Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — 
 - **Band status with fix prompt**: option 2 detects non-compliant bands and offers to fix immediately
 - **Auto-update**: option 6 downloads latest scripts from GitHub and exits cleanly
 - **CLI auto-restore after firmware update**: `on-boot.sh` restores `/usr/local/sbin/u5gmax-bandfix` from local `/data/` copy if wiped by a UniFi OS update
-- **WCDMA recovery**: detects 3G fallback and forces reregistration to 4G/5G
+- **WCDMA excluded via mode lock**: radio preference is forced to `5gnr,lte` — WCDMA/3G is disabled at the modem level, not just detected at runtime
+- **WCDMA recovery**: detects 3G fallback and forces reregistration to 4G/5G (failsafe if modem ignores the mode lock)
 
 ### v1.0.0 (2026-06-16)
 - Initial release: hourly cron enforcement of Odido band spec on UCG Fiber
@@ -207,7 +208,7 @@ printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$ICCID" \
 Expected output (Odido-compliant):
 
 ```json
-{"result":{"lte_band":"1,3,7,38","nr5g_sa_band":"1,3,7,38,78","nr5g_nsa_band":"1,3,7,38,78"}}
+{"result":{"net_sel_pref":"automatic","mode":"5gnr,lte","lte_band":"1,3,7,38","nr5g_sa_band":"1,3,7,38,78","nr5g_nsa_band":"1,3,7,38,78"}}
 ```
 
 ## Uninstall

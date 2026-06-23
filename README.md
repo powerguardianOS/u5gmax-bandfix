@@ -1,6 +1,8 @@
 # u5gmax-bandfix
 
-Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — persistently, from the Cloud Gateway.
+Automatically enforce ISP band restrictions on the UniFi U5G-Max modem — persistently, from the Cloud Gateway.
+
+Supports **Odido NL** and **Free Mobile FR** out of the box. Switching profiles takes one command.
 
 > Inspired by [udm-iptv](https://github.com/fabianishere/udm-iptv)
 
@@ -8,10 +10,16 @@ Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — 
 
 ## Changelog
 
+### v1.2.0 (2026-06-24)
+- **Multi-ISP profile support**: install.sh asks which ISP during setup; profile is stored in config and used by all scripts
+- **Supported profiles**: Odido NL (UMBBE630) and Free Mobile FR (UMBBE631)
+- **Switch ISP profile**: option 3 in the interactive menu, or `u5gmax-bandfix profile` from the shell
+- **Backwards compatible**: existing installs without a profile in config default to Odido NL automatically
+
 ### v1.1.0 (2026-06-20)
 - **Self-healing after modem reboot**: automatically rescans host key and reinstalls SSH key when modem tmpfs is wiped
-- **IP change recovery**: polls MongoDB for updated IP when SSH fails, handles Odido WAN IP shuffles
-- **Interactive CLI** (`u5gmax-bandfix`): menu with force check, band status, edit bands, logs, key reinstall, update, uninstall
+- **IP change recovery**: polls MongoDB for updated IP when SSH fails, handles WAN IP changes on reboot
+- **Interactive CLI** (`u5gmax-bandfix`): menu with force check, band status, profile switch, logs, key reinstall, update, uninstall
 - **Band status with fix prompt**: option 2 detects non-compliant bands and offers to fix immediately
 - **Auto-update**: option 6 downloads latest scripts from GitHub and exits cleanly
 - **CLI auto-restore after firmware update**: `on-boot.sh` restores `/usr/local/sbin/u5gmax-bandfix` from local `/data/` copy if wiped by a UniFi OS update
@@ -19,7 +27,7 @@ Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — 
 - **WCDMA recovery**: detects 3G fallback and forces reregistration to 4G/5G (failsafe if modem ignores the mode lock)
 
 ### v1.0.0 (2026-06-16)
-- Initial release: hourly cron enforcement of Odido band spec on UCG Fiber
+- Initial release: hourly cron enforcement of Odido NL band spec on UCG Fiber
 - Automated install via MongoDB credential lookup
 - SSH key-based auth, log rotation, singleton lock
 
@@ -27,28 +35,39 @@ Automatically enforce Odido NL band restrictions on the UniFi U5G-Max modem — 
 
 ## The Problem
 
-Odido NL (formerly T-Mobile NL) publishes a hardware specification for all FWA (Fixed Wireless Access) equipment. It defines exactly which bands must be **active** and which must be permanently **disabled**:
-
-| Radio | Required active bands | Forbidden (must be disabled) |
-|-------|----------------------|------------------------------|
-| LTE (FDD) | B1, B3, B7 | B8, B20, B28 |
-| LTE (TDD) | B38 | — |
-| NR5G SA (FDD) | n1, n3, n7 | n8, n20, n28 |
-| NR5G SA (TDD) | n38, n78 | — |
-| NR5G NSA (FDD) | n1, n3, n7 | n8, n20, n28 |
-| NR5G NSA (TDD) | n38, n78 | — |
-
-From the official spec: *"Het is niet toegestaan om deze banden te gebruiken. De banden moeten uitgezet worden in firmware van de apparatuur, en het moet voor klanten onmogelijk worden gemaakt om de banden te activeren via bijvoorbeeld een app of web GUI."*
-
-The U5G-Max (EM9291) supports band selection via `uiwwand-ctl` over SSH, but:
+ISPs that offer FWA (Fixed Wireless Access) over 5G publish a hardware specification that defines exactly which bands must be **active** and which must be permanently **disabled**. The U5G-Max supports band selection via `uiwwand-ctl` over SSH, but:
 
 - The UniFi controller intentionally does not expose band steering or band locking options for the U5G-Max — Ubiquiti has stated this is by design, as band selection is considered a carrier-managed setting, not an end-user setting.
 - On every adoption or reconfiguration event, the UniFi controller pushes a full radio config to the modem that resets all band selections back to default (all bands enabled). This happens silently in the background.
-- The modem API (`uiwwand-ctl`) does support `set-radio-pref`, but this interface is undocumented and not exposed through the UniFi UI. There is no supported way to make band selections persistent through the UI.
+- The modem API (`uiwwand-ctl`) does support `set-radio-pref`, but this interface is undocumented and not exposed through the UniFi UI.
 - Community requests for band locking in the UniFi forum have been open since 2022 without a committed fix.
 - The U5G-Max runs on tmpfs — any config written to it is lost on reboot, and the `/etc/persistent/cfg/` partition has only ~100 bytes free — too small for scripts.
 
-**Result**: every time the Cloud Gateway or U5G-Max reboots, all bands come back and your Odido connection stops working until the bands are manually reset. This means the only way to enforce Odido-required band restrictions is to run an out-of-band script that monitors and corrects the config after the controller resets it.
+**Result**: every time the Cloud Gateway or U5G-Max reboots, all bands come back and your ISP connection stops working until the bands are manually reset.
+
+## ISP Profiles
+
+### Odido NL (model `UMBBE630`)
+
+| Radio | Required active bands |
+|-------|----------------------|
+| LTE | B1, B3, B7, B38 |
+| NR5G SA | n1, n3, n7, n38, n78 |
+| NR5G NSA | n1, n3, n7, n38, n78 |
+
+*Source: Odido 5G Internet hardware specificaties en voorwaarden (3GPP Release 16)*
+
+### Free Mobile FR (model `UMBBE631`)
+
+| Radio | Required active bands |
+|-------|----------------------|
+| LTE | B1, B3, B7, B8, B28 |
+| NR5G SA | n1, n28, n78 |
+| NR5G NSA | n1, n28, n78 |
+
+*Source: Free Mobile FWA documentation (3GPP Release 16)*
+
+---
 
 ## WCDMA Recovery
 
@@ -61,7 +80,7 @@ u5gmax-bandfix runs as a cron job **on the Cloud Gateway** (not on the modem). E
 1. Looks up the current U5G-Max IP in the UniFi MongoDB database (the IP is a dynamic public 5G WAN address that changes on reboot)
 2. Connects over SSH using a persistent key pair stored in `/data/`
 3. Reads the current band config via `uiwwand-ctl`
-4. Compares it against the exact Odido specification
+4. Compares it against the ISP profile spec stored in config
 5. If it doesn't match → applies the correct configuration
 6. Verifies the result and logs everything to `/data/u5gmax-bandfix/band-fix.log`
 
@@ -69,43 +88,32 @@ u5gmax-bandfix runs as a cron job **on the Cloud Gateway** (not on the modem). E
 Cloud Gateway (/data/ persistent)
 │
 ├── id_ed25519         SSH private key
-├── config             SSH user + ICCID
+├── config             SSH user, ICCID, ISP profile + bands
 ├── band-fix.sh        Runs hourly via cron
 └── band-fix.log       Audit log
          │
          │ SSH (key-based, no password)
          ▼
-U5G-Max (UMBBE630)
+U5G-Max (UMBBE630 / UMBBE631)
 │
 └── uiwwand-ctl        Band configuration tool
 ```
 
-The ICCID of the active SIM is required by `uiwwand-ctl set-radio-pref`. It's read once during install and cached in the config.
-
-## Network Details
-
-| Setting | Value |
-|---------|-------|
-| APN | `Fwainternet` |
-| IP address | Dynamic public IPv4 |
-| 3GPP release | Release 16 or higher |
-| Connection types | 4G, 5G NSA (option 3X), 5G SA (option 2) |
-
-> **APN note**: If you're using a third-party modem, make sure the APN is set to `Fwainternet`. The U5G-Max configures this automatically from the SIM.
+The ICCID of the active SIM is required by `uiwwand-ctl set-radio-pref`. It's read live from the modem on every run and cached in config as a fallback.
 
 ## Tested Environment
 
 | Component | Version |
 |-----------|---------|
-| Cloud Gateway Fiber firmware | v5.1.15 |
+| Cloud Gateway Fiber firmware | v5.1.19 |
 | U5G-Max firmware | 7.4.1.19032 |
 | UniFi Network | 10.4.57 |
-| ISP | Odido 5G Internet voor Bedrijven (FWA, NL) |
+| ISP | Odido 5G Internet (FWA, NL) |
 
 ## Requirements
 
 - UniFi Cloud Gateway (UDM Pro, UDM SE, or Cloud Gateway Fiber)
-- U5G-Max (model `UMBBE630`) adopted in UniFi Network
+- U5G-Max (`UMBBE630` for Odido NL, `UMBBE631` for Free Mobile FR) adopted in UniFi Network
 - SSH enabled in **UniFi Network → Settings → Advanced → SSH**
 - `sshpass` available on the Cloud Gateway (for one-time key install)
 - `python3` available on the Cloud Gateway (for JSON parsing)
@@ -118,14 +126,15 @@ curl -sSL https://raw.githubusercontent.com/royrijpma/u5gmax-bandfix/main/instal
 
 Run as root on the Cloud Gateway. The installer will:
 
-1. Read the SSH username and password from MongoDB (no manual input needed)
-2. Detect the U5G-Max IP from MongoDB
-3. Generate an SSH key pair at `/data/u5gmax-bandfix/id_ed25519`
-4. Copy the public key to the U5G-Max (uses the MongoDB password — one time only)
-5. Read the SIM ICCID from the modem and cache it
-6. Install `/data/u5gmax-bandfix/band-fix.sh`
-7. Create `/etc/cron.d/u5gmax-bandfix` (runs hourly)
-8. Apply the fix immediately and show the result
+1. **Ask which ISP profile** to use (Odido NL or Free Mobile FR)
+2. Read the SSH username and password from MongoDB (no manual input needed)
+3. Detect the U5G-Max IP from MongoDB
+4. Generate an SSH key pair at `/data/u5gmax-bandfix/id_ed25519`
+5. Copy the public key to the U5G-Max (uses the MongoDB password — one time only)
+6. Read the SIM ICCID from the modem and cache it
+7. Install `/data/u5gmax-bandfix/band-fix.sh`
+8. Create `/etc/cron.d/u5gmax-bandfix` (runs hourly)
+9. Apply the fix immediately and show the result
 
 ### Local install (from cloned repo)
 
@@ -141,17 +150,17 @@ After installation, type `u5gmax-bandfix` in the shell to open the interactive m
 
 ```
 ╔══════════════════════════════════════════════╗
-║            u5gmax-bandfix  v1.1.0            ║
-║      Odido NL Band Fix — UniFi U5G-Max       ║
+║            u5gmax-bandfix  v1.2.0            ║
+║   Odido NL — UniFi U5G-Max                   ║
 ╠══════════════════════════════════════════════╣
   U5G-Max IP:  178.x.x.x
-  Cron:        active
-  Last run:    2026-06-20 09:05:01
-  Result:      OK — bands match Odido spec
+  Cron:        active (hourly at :05)
+  Last run:    2026-06-24 09:05:01
+  Result:      ✓ Odido NL-compliant
 ╠══════════════════════════════════════════════╣
   1) Force band check now
   2) Show current band status
-  3) Edit required bands
+  3) Switch ISP profile
   4) Show logs
   5) Reinstall SSH key on U5G-Max
   6) Update to latest version
@@ -165,10 +174,15 @@ You can also run commands directly from the shell without the menu:
 ```bash
 u5gmax-bandfix check      # force band check
 u5gmax-bandfix status     # show band status
+u5gmax-bandfix profile    # switch ISP profile
 u5gmax-bandfix logs       # show logs
 u5gmax-bandfix update     # update to latest version
 u5gmax-bandfix uninstall  # uninstall
 ```
+
+### Switching ISP profile
+
+Use option 3 in the menu or `u5gmax-bandfix profile` from the shell. The profile selection updates the config and optionally runs a band check immediately.
 
 ### Self-healing after modem reboot
 
@@ -179,7 +193,7 @@ After a modem reboot, the U5G-Max loses its SSH keys and host keys (tmpfs). The 
 
 If bands are non-compliant, option 2 asks:
 ```
-Bands are non-compliant. Apply Odido fix now? [Y/n]
+Bands are non-compliant. Apply <ISP profile> fix now? [Y/n]
 ```
 
 ### Check logs
@@ -198,14 +212,15 @@ tail -f /data/u5gmax-bandfix/band-fix.log
 
 ```bash
 # From the Cloud Gateway
-ICCID=$(grep ICCID /data/u5gmax-bandfix/config | cut -d'"' -f2)
-U5G_IP=$(mongo --quiet localhost:27117/ace --eval "print(db.device.findOne({model:'UMBBE630'}).ip)")
+ICCID=$(grep ICCID_CACHE /data/u5gmax-bandfix/config | cut -d'"' -f2)
+MODEL=$(grep MODEM_MODEL /data/u5gmax-bandfix/config | cut -d'"' -f2)
+U5G_IP=$(mongo --quiet localhost:27117/ace --eval "print(db.device.findOne({model:'$MODEL'}).ip)")
 SSH_USER=$(grep SSH_USER /data/u5gmax-bandfix/config | cut -d'"' -f2)
 printf '{"method":"get-radio-pref","params":{"iccid":"%s"}}' "$ICCID" \
   | ssh -i /data/u5gmax-bandfix/id_ed25519 "${SSH_USER}@${U5G_IP}" uiwwand-ctl
 ```
 
-Expected output (Odido-compliant):
+Expected output (Odido NL-compliant):
 
 ```json
 {"result":{"net_sel_pref":"automatic","mode":"5gnr,lte","lte_band":"1,3,7,38","nr5g_sa_band":"1,3,7,38,78","nr5g_nsa_band":"1,3,7,38,78"}}
@@ -241,5 +256,5 @@ This tool was entirely vibe-coded with [Claude](https://claude.ai) — from arch
 
 ---
 
-*Not affiliated with Ubiquiti or Odido. Use at your own risk.*  
-*Band specification source: Odido 5G Internet hardware specificaties en voorwaarden (3GPP Release 16).*
+*Not affiliated with Ubiquiti, Odido, or Free Mobile. Use at your own risk.*  
+*Band specifications: Odido 5G Internet hardware specificaties en voorwaarden · Free Mobile FWA documentation (3GPP Release 16).*

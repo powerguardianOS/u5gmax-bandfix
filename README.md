@@ -51,13 +51,14 @@ ISPs that offer FWA (Fixed Wireless Access) over 5G publish a hardware specifica
 
 ### Odido NL
 
-| Radio | Required active bands |
-|-------|----------------------|
-| LTE | B1, B3, B7, B38 |
-| NR5G SA | n1, n3, n7, n38, n78 |
-| NR5G NSA | n1, n3, n7, n38, n78 |
+| Radio | Required active bands | Must be disabled |
+|-------|----------------------|-----------------|
+| LTE (FDD) | B1, B3, B7 | B8, B20, B28 |
+| LTE (TDD) | B38 | — |
+| NR5G SA/NSA (FDD) | n1, n3, n7 | n8, n20, n28 |
+| NR5G SA/NSA (TDD) | n38, n78 | — |
 
-*Source: Odido 5G Internet hardware specificaties en voorwaarden (3GPP Release 16)*
+*Source: [Odido 5G Internet hardware specificaties en voorwaarden](https://assets.odido.nl/x/f4aba6813e/5g-internet-hardware-specificaties-voorwaarden.pdf) (3GPP Release 16)*
 
 ### Free Mobile FR
 

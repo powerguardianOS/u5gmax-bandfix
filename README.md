@@ -12,6 +12,9 @@ The modem is detected automatically by searching for any `UMBBE*` model in Mongo
 
 ## Changelog
 
+### v1.3.0 (2026-07-01)
+- **Scheduled one-time or daily modem reboot** (menu option 8): schedule the U5G-Max to reboot at a specific time, once or every 24h. After the reboot, band-fix runs automatically. See [Scheduling a Modem Reboot](#scheduling-a-modem-reboot) for why this is useful.
+
 ### v1.2.0 (2026-06-24)
 - **Multi-ISP profile support**: install.sh asks which ISP during setup; profile is stored in config and used by all scripts
 - **Supported profiles**: Odido NL and Free Mobile FR
@@ -199,6 +202,26 @@ If bands are non-compliant, option 2 asks:
 ```
 Bands are non-compliant. Apply <ISP profile> fix now? [Y/n]
 ```
+
+### Scheduling a Modem Reboot
+
+**Menu option 8 — Schedule one-time reboot** (new in v1.3.0)
+
+Some FWA ISPs renew your public IP address every 24 hours at the exact time you first activated your connection. If you activated at 20:00, your IP changes every night at 20:00 — causing a 2–3 minute connection drop at that time, every day.
+
+By scheduling a one-time reboot of the U5G-Max just before or at a convenient low-traffic time (e.g. 04:00), the modem re-registers with the network and the 24-hour IP renewal cycle resets to that new time. After the one-time reboot, future IP renewals happen at 04:00 instead of 20:00 — while you're asleep.
+
+After the scheduled reboot, `reboot-modem.sh` automatically:
+1. Waits for the modem to come back online (boot takes ~5 minutes)
+2. Runs a band-fix to re-apply your ISP's band configuration
+
+To schedule a reboot, use option 8 in the menu or:
+
+```bash
+u5gmax-bandfix reboot-schedule
+```
+
+The time you enter is in your **local system timezone** (shown on screen). A one-time schedule removes itself after executing — no cleanup needed.
 
 ### Check logs
 
